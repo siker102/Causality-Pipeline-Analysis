@@ -1,0 +1,7 @@
+[client]
+
+[theme]
+primaryColor = "#F63366"
+
+[server]
+maxUploadSize = 400

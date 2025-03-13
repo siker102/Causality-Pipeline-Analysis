@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Streamlit Run",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "streamlit",
+            "args": ["run", "causality_pipeline.py"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

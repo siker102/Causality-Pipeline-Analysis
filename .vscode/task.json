@@ -1,0 +1,12 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Streamlit",
+            "type": "shell",
+            "command": "streamlit",
+            "args": ["run", "causality_pipeline.py"],
+            "problemMatcher": []
+        }
+    ]
+}

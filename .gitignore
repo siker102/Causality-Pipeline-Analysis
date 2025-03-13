@@ -1,0 +1,36 @@
+# Basic gitignore file
+
+# R specific ignores
+^.*\.Rproj$
+^\.Rproj\.user$
+
+# Python specific ignores
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.log
+
+# Jupyter Notebook specific ignores
+.ipynb_checkpoints/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# System specific ignores
+.DS_Store
+Thumbs.db
+
+# Other
+*.swp
+*.swo
+
+# Exclude PAGId-main folder
+PAGId-main/
