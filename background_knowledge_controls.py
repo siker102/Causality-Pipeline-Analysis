@@ -203,6 +203,6 @@ def _apply_tier_constraints(
     for tier_level in sorted(tier_map.keys(), reverse=True):
         tier_vars = [node_map[var] for var in tier_map[tier_level]]
         for node in tier_vars:
-            if tier_level != 0:
+            #if tier_level != 0:
                 bk.add_node_to_tier(node, tier_level)
 

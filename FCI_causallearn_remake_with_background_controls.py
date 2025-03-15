@@ -67,6 +67,51 @@ def print_background_knowledge(bg_knowledge: BackgroundKnowledge):
     
     print("\n============================")
 
+def check_tier_constraint(node1: Node, node2: Node, bk: BackgroundKnowledge) -> bool:
+    """
+    Check if an edge from node1 to node2 respects tier constraints.
+    Edges from higher tier to lower tier are not allowed.
+    """
+    if bk is None:
+        return True
+        
+    tier1 = bk.tier_value_map.get(node1.get_name())
+    tier2 = bk.tier_value_map.get(node2.get_name())
+    
+    # If either node doesn't have a tier, no constraint
+    if tier1 is None or tier2 is None:
+        return True
+        
+    # Higher tier values shouldn't point to lower tier values
+    return tier1 <= tier2
+
+def safe_remove_edge(graph: Graph, edge: Edge, bk: BackgroundKnowledge | None) -> bool:
+    """Only remove an edge if it's not required by background knowledge."""
+    node1, node2 = edge.get_node1(), edge.get_node2()
+    
+    if bk is not None and (bk.is_required(node1, node2) or bk.is_required(node2, node1)):
+        return False
+        
+    graph.remove_edge(edge)
+    return True
+
+def safe_add_directed_edge(graph: Graph, node1: Node, node2: Node, bk: BackgroundKnowledge | None) -> bool:
+    """Only add a directed edge if it doesn't violate background knowledge."""
+    if bk is not None:
+        # Check if forbidden
+        if bk.is_forbidden(node1, node2):
+            return False
+            
+        # Check tier constraints
+        tier1 = bk.tier_value_map.get(node1.get_name())
+        tier2 = bk.tier_value_map.get(node2.get_name())
+        
+        if tier1 is not None and tier2 is not None and tier1 > tier2:
+            return False
+    
+    graph.add_directed_edge(node1, node2)
+    return True
+
 def traverseSemiDirected(node: Node, edge: Edge) -> Node | None:
     if node == edge.get_node1():
         if edge.get_endpoint1() == Endpoint.TAIL or edge.get_endpoint1() == Endpoint.CIRCLE:
@@ -223,120 +268,164 @@ def fci_orient_bk(bk: BackgroundKnowledge | None, graph: GeneralGraph):
         node1, node2 = edge.get_node1(), edge.get_node2()
         print(f"Node1: ",[edge.get_node1().get_name()], "Node2:" ,[edge.get_node2().get_name()])
         if bk.is_forbidden(node1, node2) and bk.is_forbidden(node2, node1):
-            edges_to_remove.append(edge)
+            if not (bk.is_required(node1, node2) or bk.is_required(node2, node1)):
+                edges_to_remove.append(edge)
     # Then remove edges forbidden in both directions
     for edge in edges_to_remove:
         graph.remove_edge(edge)
-        print(f"Removed edge {edge} as both directions are forbidden.")
+        print(f"Removed edge {edge} as both directions are forbidden and not required.")
     # Second pass: Handle other cases
     edges = graph.get_graph_edges()  # Refresh after removal
     for edge in edges:
         node1, node2 = edge.get_node1(), edge.get_node2()
-        if bk.is_forbidden(node1, node2):
-            if graph.get_edge(node2, node1) is not None:
-                continue  # Already handled
-            graph.remove_edge(edge)
-            graph.add_directed_edge(node2, node1)
-            print(f"Orienting edge (Knowledge): {node2} -> {node1}")
-        elif bk.is_forbidden(node2, node1):
+        # Required edges take precedence
+        if bk.is_required(node1, node2):
             graph.remove_edge(edge)
             graph.add_directed_edge(node1, node2)
-            print(f"Orienting edge (Knowledge): {node1} -> {node2}")
-        elif bk.is_required(node1, node2):
-            graph.remove_edge(edge)
-            graph.add_directed_edge(node1, node2)
-            print(f"Orienting edge (Knowledge): {node1} -> {node2}")
+            print(f"Orienting required edge: {node1.get_name()} -> {node2.get_name()}")
         elif bk.is_required(node2, node1):
             graph.remove_edge(edge)
             graph.add_directed_edge(node2, node1)
-            print(f"Orienting edge (Knowledge): {node2} -> {node1}")
+            print(f"Orienting required edge: {node2.get_name()} -> {node1.get_name()}")
+        elif bk.is_forbidden(node1, node2):
+            graph.remove_edge(edge)
+            graph.add_directed_edge(node2, node1)
+            print(f"Orienting edge (forbidden in one direction): {node2.get_name()} -> {node1.get_name()}")
+        elif bk.is_forbidden(node2, node1):
+            graph.remove_edge(edge)
+            graph.add_directed_edge(node1, node2)
+            print(f"Orienting edge (forbidden in one direction): {node1.get_name()} -> {node2.get_name()}")
     print("Finishing BK Orientation.")
 
 
 def is_arrow_point_allowed(node_x: Node, node_y: Node, graph: Graph, knowledge: BackgroundKnowledge | None) -> bool:
+    # If already an arrow, maintain it
     if graph.get_endpoint(node_x, node_y) == Endpoint.ARROW:
         return True
+    
+    # If a tail, can't make it an arrow
     if graph.get_endpoint(node_x, node_y) == Endpoint.TAIL:
         return False
-    if graph.get_endpoint(node_y, node_x) == Endpoint.ARROW:
-        if knowledge is not None and knowledge.is_forbidden(node_x, node_y):
+    
+    # Check if forbidden by background knowledge
+    if knowledge is not None and knowledge.is_forbidden(node_x, node_y):
+        return False
+    
+    # Check if violates tier constraints
+    if knowledge is not None:
+        tier_x = knowledge.tier_value_map.get(node_x.get_name())
+        tier_y = knowledge.tier_value_map.get(node_y.get_name())
+        if tier_x is not None and tier_y is not None and tier_x > tier_y:
             return False
-    if graph.get_endpoint(node_y, node_x) == Endpoint.TAIL:
-        if knowledge is not None and knowledge.is_forbidden(node_x, node_y):
-            return False
+    
+    # For circle endpoints, check if the opposite direction is required
+    if knowledge is not None and knowledge.is_required(node_y, node_x):
+        return False
+    
     return graph.get_endpoint(node_x, node_y) == Endpoint.CIRCLE
 
 
 def rule0(graph: Graph, nodes: List[Node], sep_sets: Dict[Tuple[int, int], Set[int]],
           knowledge: BackgroundKnowledge | None,
           verbose: bool):
-    reorientAllWith(graph, Endpoint.CIRCLE)
+    reorientAllWith(graph, Endpoint.CIRCLE, knowledge=knowledge)
+    
+    # Apply background knowledge orientation early
     fci_orient_bk(knowledge, graph)
+    
     for node_b in nodes:
         adjacent_nodes = graph.get_adjacent_nodes(node_b)
         if len(adjacent_nodes) < 2:
             continue
-
+            
         cg = ChoiceGenerator(len(adjacent_nodes), 2)
         combination = cg.next()
+        
         while combination is not None:
             node_a = adjacent_nodes[combination[0]]
             node_c = adjacent_nodes[combination[1]]
             combination = cg.next()
-
+            
             if graph.is_adjacent_to(node_a, node_c):
                 continue
+                
             if graph.is_def_collider(node_a, node_b, node_c):
                 continue
-            # check if is collider
+                
             sep_set = sep_sets.get((graph.get_node_map()[node_a], graph.get_node_map()[node_c]))
+            
             if sep_set is not None and not sep_set.__contains__(graph.get_node_map()[node_b]):
+                # Check background knowledge before orienting
                 if not is_arrow_point_allowed(node_a, node_b, graph, knowledge):
                     continue
+                    
                 if not is_arrow_point_allowed(node_c, node_b, graph, knowledge):
                     continue
-
-                edge1 = graph.get_edge(node_a, node_b)
-                graph.remove_edge(edge1)
-                graph.add_edge(Edge(node_a, node_b, edge1.get_proximal_endpoint(node_a), Endpoint.ARROW))
-
-                edge2 = graph.get_edge(node_c, node_b)
-                graph.remove_edge(edge2)
-                graph.add_edge(Edge(node_c, node_b, edge2.get_proximal_endpoint(node_c), Endpoint.ARROW))
-
+                
+                # Don't modify required edges
+                if knowledge is None or not knowledge.is_required(node_b, node_a):
+                    edge1 = graph.get_edge(node_a, node_b)
+                    graph.remove_edge(edge1)
+                    graph.add_edge(Edge(node_a, node_b, edge1.get_proximal_endpoint(node_a), Endpoint.ARROW))
+                
+                if knowledge is None or not knowledge.is_required(node_b, node_c):
+                    edge2 = graph.get_edge(node_c, node_b)
+                    graph.remove_edge(edge2)
+                    graph.add_edge(Edge(node_c, node_b, edge2.get_proximal_endpoint(node_c), Endpoint.ARROW))
+                
                 if verbose:
-                    print(
-                        "Orienting collider: " + node_a.get_name() + " *-> " + node_b.get_name() + " <-* " + node_c.get_name())
+                    print("Orienting collider: " + node_a.get_name() + " *-> " + node_b.get_name() + 
+                          " <-* " + node_c.get_name())
 
-
-def reorientAllWith(graph: Graph, endpoint: Endpoint):
-    # reorient all edges with CIRCLE Endpoint
+def reorientAllWith(graph: Graph, endpoint: Endpoint, knowledge: BackgroundKnowledge | None,):
+    """Reorient all edges while preserving background knowledge requirements."""
     ori_edges = graph.get_graph_edges()
+    bk = knowledge
+    
     for ori_edge in ori_edges:
+        node1, node2 = ori_edge.get_node1(), ori_edge.get_node2()
+        
+        # Check required edge status before reorientation
+        if bk is not None:
+            if bk.is_required(node1, node2):
+                # Keep node1 -> node2 orientation
+                graph.remove_edge(ori_edge)
+                graph.add_directed_edge(node1, node2)
+                continue
+                
+            if bk.is_required(node2, node1):
+                # Keep node2 -> node1 orientation
+                graph.remove_edge(ori_edge)
+                graph.add_directed_edge(node2, node1)
+                continue
+                
+        # Default reorientation to circles
         graph.remove_edge(ori_edge)
-        ori_edge.set_endpoint1(endpoint)
-        ori_edge.set_endpoint2(endpoint)
-        graph.add_edge(ori_edge)
+        graph.add_edge(Edge(node1, node2, endpoint, endpoint))
 
 
-def ruleR1(node_a: Node, node_b: Node, node_c: Node, graph: Graph, bk: BackgroundKnowledge | None, changeFlag: bool,
-           verbose: bool = False) -> bool:
+def ruleR1(node_a: Node, node_b: Node, node_c: Node, graph: Graph, bk: BackgroundKnowledge | None, 
+           changeFlag: bool, verbose: bool = False) -> bool:
     if graph.is_adjacent_to(node_a, node_c):
         return changeFlag
-
+    
     if graph.get_endpoint(node_a, node_b) == Endpoint.ARROW and graph.get_endpoint(node_c, node_b) == Endpoint.CIRCLE:
+        # Don't orient if not allowed by background knowledge
         if not is_arrow_point_allowed(node_b, node_c, graph, bk):
             return changeFlag
-
+        
+        # Don't reorient required edges
+        if bk is not None and bk.is_required(node_c, node_b):
+            return changeFlag
+            
         edge1 = graph.get_edge(node_c, node_b)
         graph.remove_edge(edge1)
         graph.add_edge(Edge(node_c, node_b, Endpoint.ARROW, Endpoint.TAIL))
-
         changeFlag = True
-
+        
         if verbose:
             print("Orienting edge (Away from collider):" + graph.get_edge(node_b, node_c).__str__())
-
+            
     return changeFlag
 
 
@@ -451,9 +540,10 @@ def getPath(node_c: Node, previous) -> List[Node]:
     return l
 
 
-def doDdpOrientation(node_d: Node, node_a: Node, node_b: Node, node_c: Node, previous, graph: Graph, data,
-                     independence_test_method, alpha: float, sep_sets: Dict[Tuple[int, int], Set[int]],
-                     change_flag: bool, bk, verbose: bool = False) -> (bool, bool):
+def doDdpOrientation(node_d: Node, node_a: Node, node_b: Node, node_c: Node, previous, graph: Graph, 
+                    data, independence_test_method, alpha: float, 
+                    sep_sets: Dict[Tuple[int, int], Set[int]], change_flag: bool, 
+                    bk: BackgroundKnowledge | None, verbose: bool = False) -> (bool, bool):
     """
     Orients the edges inside the definite discriminating path triangle. Takes
     the left endpoint, and a,b,c as arguments.
@@ -494,18 +584,27 @@ def doDdpOrientation(node_d: Node, node_a: Node, node_b: Node, node_c: Node, pre
         ind = sep_set.__contains__(graph.get_node_map()[node_b])
 
     if ind:
+        # Check if reorientation is allowed by background knowledge
+        if bk is not None and bk.is_required(node_c, node_b):
+            return True, change_flag
+            
+        if not is_arrow_point_allowed(node_b, node_c, graph, bk):
+            return True, change_flag
+            
         edge = graph.get_edge(node_c, node_b)
         graph.remove_edge(edge)
         graph.add_edge(Edge(node_c, node_b, edge.get_proximal_endpoint(node_c), Endpoint.TAIL))
-
+        
         if verbose:
-            print(
-                "Orienting edge (Definite discriminating path d = " + node_d.get_name() + "): " + graph.get_edge(node_b,
-                                                                                                                 node_c).__str__())
-
+            print("Orienting edge (Definite discriminating path): " + 
+                  graph.get_edge(node_b, node_c).__str__())
+        
         change_flag = True
         return True, change_flag
     else:
+        # For collider orientations
+        if not is_arrow_point_allowed(node_a, node_b, graph, bk) or not is_arrow_point_allowed(node_c, node_b, graph, bk):
+            return False, change_flag
         if not is_arrow_point_allowed(node_a, node_b, graph, bk):
             return False, change_flag
 
@@ -828,13 +927,13 @@ def fci(dataset: ndarray, independence_test_method: str=fisherz, alpha: float = 
     # FAS (“Fast Adjacency Search”) is the adjacency search of the PC algorithm, used as a first step for the FCI algorithm.
     graph, sep_sets, test_results = fas(dataset, nodes, independence_test_method=independence_test_method, alpha=alpha,
                                         knowledge=background_knowledge, depth=depth, verbose=verbose, show_progress=show_progress)
-    reorientAllWith(graph, Endpoint.CIRCLE)
+    reorientAllWith(graph, Endpoint.CIRCLE, knowledge=background_knowledge)
 
     rule0(graph, nodes, sep_sets, background_knowledge, verbose)
 
     removeByPossibleDsep(graph, independence_test_method, alpha, sep_sets, background_knowledge) 
 
-    reorientAllWith(graph, Endpoint.CIRCLE)
+    reorientAllWith(graph, Endpoint.CIRCLE, knowledge=background_knowledge)
     rule0(graph, nodes, sep_sets, background_knowledge, verbose)
 
     change_flag = True
