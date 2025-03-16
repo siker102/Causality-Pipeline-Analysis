@@ -221,9 +221,13 @@ def main():
                     # Clear generated data when switching to upload mode
                     st.session_state.generated_data = None
                     st.session_state.true_graph = None
+                    with st.expander("View Uploaded Data"):
+                        st.dataframe(dataframe.head())
+                        st.dataframe(dataframe.describe())
                 except Exception as e:
                     st.error(f"Error reading file: {str(e)}")
                     return
+            
         else:
             # SCM Generation Controls
             with st.sidebar.expander("SCM Parameters"):
@@ -235,6 +239,8 @@ def main():
                 max_coefficient = st.slider("Max coefficient value for relationship strength", 0, 1000, 10)
             
             if st.sidebar.button("Generate New SCM"):
+                #Reset background knowledge
+                background_knowledge_controls.reset_background_knowledge_state()
                 # Store the generated SCM in session state
                 generated_data, true_graph, equations = random_scm_generation.generate_random_scm(
                     num_vars, edge_prob, noise_level, num_samples, max_mean, max_coefficient

@@ -3,9 +3,9 @@ from causallearn.graph.Edge import Edge
 from typing import List, Tuple
 from causallearn.graph.GeneralGraph import GeneralGraph
 from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
-from FCI_causallearn_remake_with_background_controls import fci
+from FCI_causallearn_remake_with_background_controls import fci_remake
 
-#@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def run_fci_analysis(dataframe, test_type, alpha, _bk: BackgroundKnowledge) -> Tuple[GeneralGraph, List[Edge]]:
     """FCI + Caching"""
     data = dataframe.to_numpy()
@@ -23,7 +23,7 @@ def run_fci_analysis(dataframe, test_type, alpha, _bk: BackgroundKnowledge) -> T
     print(_bk.tier_map)
     print(_bk.tier_value_map)
     # g, edges = fci(data, test_type, alpha=alpha, background_knowledge=_bk)
-    g, edges = fci(data, test_type, alpha=alpha, background_knowledge=_bk)
+    g, edges = fci_remake(data, test_type, alpha=alpha, background_knowledge=_bk)
     edges1 = g.get_graph_edges()
 
     # Debugging

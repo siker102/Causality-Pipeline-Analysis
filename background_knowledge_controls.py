@@ -8,12 +8,23 @@ from causallearn.graph.GeneralGraph import GeneralGraph
 from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
 from causallearn.graph.GraphNode import GraphNode
 
-#reset function for when changing from generated data to uploaded data
+# Reset function for when changing from generated data to uploaded data
 def reset_background_knowledge_state():
     """Reset session state for background knowledge."""
+    # Clear forbidden and required pairs
     for key in list(st.session_state.keys()):
-        if key.endswith("_pairs") or key.startswith("tier_"):
+        if key.endswith("_pairs"):
             del st.session_state[key]
+
+    # Reset idp results state
+    for key in list(st.session_state.keys()):
+        if key.endswith("results"):
+            del st.session_state[key]
+    
+    # Reset tier assignments 
+    for key in list(st.session_state.keys()):
+        if key.startswith("tier_"):
+            st.session_state[key] = 5  # Set the base value for tiers
 
 def _add_relationship_controls(df: pd.DataFrame, relationship_type: str) -> List[Tuple[str, str]]:
     """Create UI for adding edge relationships with proper state management."""
@@ -81,7 +92,7 @@ def _add_tier_controls(df: pd.DataFrame) -> Dict[int, List[str]]:
     tiers = {}
     cols = df.columns.tolist()  # Uses processed column names
     
-    st.markdown("**Tier Ordering** (Higher tiers cannot cause lower tiers)")
+    st.markdown("**Tier Ordering** (Low tiers cause high tiers, set low tiers for for example sex and age like 0 and outcome variables to higher tiers.)")
     
     # Create a dictionary to track assignments
     assigned_vars = set()
@@ -95,10 +106,10 @@ def _add_tier_controls(df: pd.DataFrame) -> Dict[int, List[str]]:
                 tier = st.number_input(
                     "Tier level",
                     min_value=0,
-                    max_value=10,
-                    value=0,
+                    max_value=100,
+                    value=5,
                     key=f"tier_{var}",
-                    help=f"Temporal tier for {var}. Higher tiers cannot be the cause of lower tiers."
+                    help=f"Temporal tier for {var}. Low tiers cause higher tiers."
                 )
                 
                 if var in assigned_vars:
@@ -150,10 +161,9 @@ def get_background_knowledge(df: pd.DataFrame) -> BackgroundKnowledge:
             constraint_list.extend([f"✅ {pair[0]} → {pair[1]}" for pair in required_pairs])
             
         if tier_map:
-            constraint_list.append("\n**Tiers:**")
             for tier_level in sorted(tier_map.keys()):
                 vars_str = ", ".join(tier_map[tier_level])
-                constraint_list.append(f"🏷️ Tier {tier_level}: {vars_str}")
+                constraint_list.append(f"Tier {tier_level}: {vars_str}")
 
         # Display all the constraints
         if constraint_list:

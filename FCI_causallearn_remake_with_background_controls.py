@@ -16,6 +16,7 @@ from causallearn.utils.cit import *
 from causallearn.utils.FAS import fas
 from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
 from causallearn.graph.GeneralGraph import GeneralGraph
+from FAS_remake import fas_remake, is_forbidden_remake
 
 def print_background_knowledge(bg_knowledge: BackgroundKnowledge):
     """Prints the properties of a BackgroundKnowledge object in a structured format for debug purposes"""
@@ -99,7 +100,7 @@ def safe_add_directed_edge(graph: Graph, node1: Node, node2: Node, bk: Backgroun
     """Only add a directed edge if it doesn't violate background knowledge."""
     if bk is not None:
         # Check if forbidden
-        if bk.is_forbidden(node1, node2):
+        if is_forbidden_remake(bk, node1, node2):
             return False
             
         # Check tier constraints
@@ -267,7 +268,7 @@ def fci_orient_bk(bk: BackgroundKnowledge | None, graph: GeneralGraph):
     for edge in edges:
         node1, node2 = edge.get_node1(), edge.get_node2()
         print(f"Node1: ",[edge.get_node1().get_name()], "Node2:" ,[edge.get_node2().get_name()])
-        if bk.is_forbidden(node1, node2) and bk.is_forbidden(node2, node1):
+        if is_forbidden_remake(bk,node1, node2) and is_forbidden_remake(bk,node2, node1):
             if not (bk.is_required(node1, node2) or bk.is_required(node2, node1)):
                 edges_to_remove.append(edge)
     # Then remove edges forbidden in both directions
@@ -287,11 +288,11 @@ def fci_orient_bk(bk: BackgroundKnowledge | None, graph: GeneralGraph):
             graph.remove_edge(edge)
             graph.add_directed_edge(node2, node1)
             print(f"Orienting required edge: {node2.get_name()} -> {node1.get_name()}")
-        elif bk.is_forbidden(node1, node2):
+        elif is_forbidden_remake(bk,node1, node2):
             graph.remove_edge(edge)
             graph.add_directed_edge(node2, node1)
             print(f"Orienting edge (forbidden in one direction): {node2.get_name()} -> {node1.get_name()}")
-        elif bk.is_forbidden(node2, node1):
+        elif is_forbidden_remake(bk,node2, node1):
             graph.remove_edge(edge)
             graph.add_directed_edge(node1, node2)
             print(f"Orienting edge (forbidden in one direction): {node1.get_name()} -> {node2.get_name()}")
@@ -308,7 +309,7 @@ def is_arrow_point_allowed(node_x: Node, node_y: Node, graph: Graph, knowledge: 
         return False
     
     # Check if forbidden by background knowledge
-    if knowledge is not None and knowledge.is_forbidden(node_x, node_y):
+    if knowledge is not None and is_forbidden_remake(knowledge, node_x, node_y):
         return False
     
     # Check if violates tier constraints
@@ -862,8 +863,8 @@ def removeByPossibleDsep(graph: Graph, independence_test_method: CIT, alpha: flo
                     break
 
 
-
-def fci(dataset: ndarray, independence_test_method: str=fisherz, alpha: float = 0.05, depth: int = -1,
+#causallearns FCI slightly changed
+def fci_remake(dataset: ndarray, independence_test_method: str=fisherz, alpha: float = 0.05, depth: int = -1,
         max_path_length: int = -1, verbose: bool = False, background_knowledge: BackgroundKnowledge | None = None, show_progress: bool = True,
         **kwargs) -> Tuple[Graph, List[Edge]]:
     """
@@ -925,7 +926,7 @@ def fci(dataset: ndarray, independence_test_method: str=fisherz, alpha: float = 
         nodes.append(node)
 
     # FAS (“Fast Adjacency Search”) is the adjacency search of the PC algorithm, used as a first step for the FCI algorithm.
-    graph, sep_sets, test_results = fas(dataset, nodes, independence_test_method=independence_test_method, alpha=alpha,
+    graph, sep_sets, test_results = fas_remake(dataset, nodes, independence_test_method=independence_test_method, alpha=alpha,
                                         knowledge=background_knowledge, depth=depth, verbose=verbose, show_progress=show_progress)
     reorientAllWith(graph, Endpoint.CIRCLE, knowledge=background_knowledge)
 
