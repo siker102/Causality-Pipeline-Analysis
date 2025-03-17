@@ -182,8 +182,28 @@ def IDP_call_and_streamlit(g: GeneralGraph, edges: list[Edge]) -> None:
                 st.write(f"Query: {result.get('query')}")
                 if result['identifiable'] == True:
                     st.write("✅ The causal effect is identifiable ✅")
-                    st.latex(result['Qop'])
-                    st.latex(result['Qexpression'])
+                    #Process and display Qexpr
+                    Qexpr = result.get('Qexpression')
+                    if Qexpr:
+                        steps_list = []
+                        st.write("### Identification Formula Steps")
+                        for step, formula in Qexpr.items():
+                            # Extract the LaTeX string from the array
+                            if isinstance(formula, np.ndarray):
+                                formula = formula[0]  # Extract the first element if it's an array
+                            # Add the current step to the steps list
+                            steps_list.append(step)
+
+                            # Construct the subscript string for steps
+                            steps_subscript = ",".join(steps_list)
+                            
+                            if step == list(Qexpr.keys())[-1]:  # Check if it's the final step
+                                complete_formula = rf"P({outcome}|do({treatment})) = " + formula
+                            else:
+                                complete_formula = rf"P_{{{steps_subscript}}} = " + formula
+                            st.latex(complete_formula)
+                    else:
+                        st.write("No identification formula available.")
                 else:
                     st.write("❌ The causal effect is not identifiable ❌")
 

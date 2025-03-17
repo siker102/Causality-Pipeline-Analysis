@@ -90,6 +90,8 @@ def fas_remake(data: ndarray, nodes: List[Node], independence_test_method: CIT_B
     test_results: Results of conditional independence tests
     """
     ## ------- check parameters ------------
+    print(alpha)
+    print(type(alpha))
     if type(data) != np.ndarray:
         raise TypeError("'data' must be 'np.ndarray' type!")
     if not all(isinstance(node, Node) for node in nodes):

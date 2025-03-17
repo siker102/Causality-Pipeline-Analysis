@@ -21,6 +21,9 @@ import background_knowledge_controls
 import random_scm_generation
 import IDP_helper_classes
 import FCI_helper_classes
+from causallearn.search.ConstraintBased.PC import pc
+from causallearn.graph.GraphClass import CausalGraph
+from PC_remake import pc_remake
 
 # Constants
 R_PACKAGES  = ['rlang','cli', 'dagitty', 'pcalg', 'PAGId']
@@ -156,7 +159,7 @@ def hasCycle(graph: GeneralGraph, edges: list[Edge]) -> bool:
     return False
 
 
-def display_results(g: GeneralGraph, edges: list[Edge]):
+def display_FCI_results(g: GeneralGraph, edges: list[Edge]):
     """Visualize and display FCI results"""
     
     try:
@@ -169,6 +172,7 @@ def display_results(g: GeneralGraph, edges: list[Edge]):
         # for edge in edges:
         #    st.write(edge.get_node1().get_name(), edge.get_node2().get_name(), edge.get_endpoint1(), edge.get_endpoint2(), edge.properties)
 
+    
         pdy = GraphUtils.to_pydot(g, edges)
         # Generate graph image in memory
         image_data = pdy.create_png()
@@ -189,6 +193,38 @@ def display_results(g: GeneralGraph, edges: list[Edge]):
         # Remove the curly braces around the condition
         visible_edges = [edge for edge in edges if Edge.Property.dd in edge.properties]
         st.write(f"Definitely direct edges: {', '.join([f'{edge.get_node1().get_name()} -> {edge.get_node2().get_name()}' for edge in visible_edges])}")
+
+def display_PC_results(g: CausalGraph):
+    """Visualize and display PC results"""
+    
+    try:
+        # Debug statements
+        # for edge in edges:
+        #    st.write(edge.get_node1().get_name(), edge.get_node2().get_name(), edge.get_endpoint1(), edge.get_endpoint2(), edge.properties)
+
+
+        print('here', g.G)
+        
+        pdy = GraphUtils.to_pydot(g.G)
+        image_data = pdy.create_png()
+        print('here niowe')
+
+        # Display image
+        st.image(image_data, caption="FCI Analysis Result, green arrow means definitely direct edge")
+
+    except Exception as e:
+        st.error(f"Graph visualization failed: {str(e)}")
+
+
+    # Model Information
+    #with st.expander("Model Metadata"):
+    #    st.write(f"Graph type: {type(g).__name__}")
+        #st.write(f"Graph data: {g.def_visible()}")
+        #st.write(f"Number of nodes: {len(g.G.get_nodes())}")
+        #st.write(f"Number of edges: {len(g.G.edges) if edges else 0}")
+        # Remove the curly braces around the condition
+        #visible_edges = [edge for edge in edges if Edge.Property.dd in edge.properties]
+        #st.write(f"Definitely direct edges: {', '.join([f'{edge.get_node1().get_name()} -> {edge.get_node2().get_name()}' for edge in visible_edges])}")
 
 
 def main():
@@ -270,9 +306,18 @@ def main():
         if dataframe is None:
             st.info("Please configure data source to begin analysis.")
             return
-
+        
         # Pcik CI test gui
         st.subheader("Analysis Configuration")
+        test_algorithm = st.radio(
+            "Algorithm Type:",
+            options=['FCI', 'PC'],
+            captions=[
+                'When you expect unobserved latent confounding.',
+                'When you have causal sufficiency',
+            ],
+            horizontal=True
+        )
         test_type = st.radio(
             "Independence Test Type:",
             options=['fisherz', 'chisq', 'gsq', 'kci', 'mv_fisherz'],
@@ -285,6 +330,8 @@ def main():
             ],
             horizontal=True
         )
+
+        
 
         # P-value input
         p_value = st.number_input(
@@ -302,8 +349,27 @@ def main():
         if run_analysis:
             with st.spinner('Performing FCI Analysis...'):
                 try:
-                    g, edges = FCI_helper_classes.run_fci_analysis(dataframe, test_type, p_value, bk)
-                    display_results(g, edges)
+                    if test_algorithm == "FCI":
+                        g, edges = FCI_helper_classes.run_FCI_analysis(dataframe, test_type, p_value, bk)
+                        display_FCI_results(g, edges)
+                        if st.session_state.generated_data is not None:
+                            true_perc, false_perc, partial_perc = FCI_helper_classes.calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
+                            st.subheader("Graph Accuracy Results")
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric(label="Perfectly identified edges", value=f"{true_perc:.2f}%")
+                            col2.metric(label="Falsely identified", value=f"{false_perc:.2f}%")
+                            col3.metric(label="Partially True Identified (exclusive true)", value=f"{partial_perc:.2f}%")
+                    else:
+                        mvpc = not dataframe.isnull().values.any()  # Set mvpc to True if there are no missing values
+                        data = dataframe.to_numpy()
+                        g = pc_remake(data, indep_test=test_type, alpha=p_value, background_knowledge=bk, mvpc=mvpc)
+                        display_PC_results(g)
+                        if st.session_state.generated_data is not None:
+                            true_perc, false_perc, partial_perc = FCI_helper_classes.calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
+                            st.subheader("Graph Accuracy Results")
+                            col1, col2, col3 = st.columns(3)
+                            col1.metric(label="Perfectly identified edges", value=f"{true_perc:.2f}%")
+                            col2.metric(label="Falsely identified", value=f"{false_perc:.2f}%")
                     with st.expander("IDP Analysis"):
                         if st.checkbox("Run IDP Analysis"):
                             install_r_packages()
