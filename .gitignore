@@ -34,3 +34,5 @@ Thumbs.db
 
 # Exclude PAGId-main folder
 PAGId-main/
+relevant papers/*
+CLAUDE.md
