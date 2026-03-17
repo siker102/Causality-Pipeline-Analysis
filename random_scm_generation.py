@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 from typing import Dict, Tuple
-from causallearn.graph.GeneralGraph import GeneralGraph
-from causallearn.graph.GraphNode import GraphNode
+from causal_discovery.graph.general_graph import GeneralGraph
+from causal_discovery.graph.graph_node import GraphNode
 import networkx as nx
 
 def generate_random_scm(num_vars=5, edge_prob=0.3, noise_level=1.0, num_samples=1000, max_mean=10, max_coefficient=10) -> Tuple[pd.DataFrame, GeneralGraph, Dict[str, str]]: 

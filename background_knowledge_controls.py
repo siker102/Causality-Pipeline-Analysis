@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
-from causallearn.graph.Edge import Edge
-from causallearn.search.ConstraintBased.FCI import fci
-from typing import List,  Dict, Tuple
+from causal_discovery.graph.edge import Edge
+from causal_discovery.graph.general_graph import GeneralGraph
+from causal_discovery.knowledge.background_knowledge import BackgroundKnowledge
+from causal_discovery.graph.graph_node import GraphNode
+from typing import List, Dict, Tuple
 from collections import OrderedDict
-from causallearn.graph.GeneralGraph import GeneralGraph
-from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
-from causallearn.graph.GraphNode import GraphNode
 
 # Reset function for when changing from generated data to uploaded data
 def reset_background_knowledge_state():

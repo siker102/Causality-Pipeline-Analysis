@@ -1,9 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from causallearn.graph.Edge import Edge, Endpoint
-from causallearn.search.ConstraintBased.FCI import fci
-from causallearn.utils.GraphUtils import GraphUtils
+from causal_discovery.graph.edge import Edge
+from causal_discovery.graph.endpoint import Endpoint
+from causal_discovery.graph.general_graph import GeneralGraph
+from causal_discovery.graph.graph_node import GraphNode
+from causal_discovery.graph.causal_graph import CausalGraph
+from causal_discovery.knowledge.background_knowledge import BackgroundKnowledge
+from causal_discovery.utils.visualization import to_pydot
+from causal_discovery.fci.fci_helpers import run_FCI_analysis, calculate_accuracy_of_graphs
+from causal_discovery.pc.pc_algorithm import pc_remake
 from typing import List, Optional, Dict, Tuple
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
@@ -11,19 +17,12 @@ from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
 from rpy2.robjects.conversion import localconverter
 from collections import OrderedDict
-from causallearn.graph.GeneralGraph import GeneralGraph
-from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
-from causallearn.graph.GraphNode import GraphNode
 import networkx as nx
 import matplotlib.pyplot as plt
 from rpy2.rinterface_lib.embedded import RRuntimeError
 import background_knowledge_controls
 import random_scm_generation
 import IDP_helper_classes
-import FCI_helper_classes
-from causallearn.search.ConstraintBased.PC import pc
-from causallearn.graph.GraphClass import CausalGraph
-from PC_remake import pc_remake
 
 # Constants
 R_PACKAGES  = ['rlang','cli', 'dagitty', 'pcalg', 'PAGId']
@@ -173,7 +172,7 @@ def display_FCI_results(g: GeneralGraph, edges: list[Edge]):
         #    st.write(edge.get_node1().get_name(), edge.get_node2().get_name(), edge.get_endpoint1(), edge.get_endpoint2(), edge.properties)
 
     
-        pdy = GraphUtils.to_pydot(g, edges)
+        pdy = to_pydot(g, edges)
         # Generate graph image in memory
         image_data = pdy.create_png()
 
@@ -205,7 +204,7 @@ def display_PC_results(g: CausalGraph):
 
         print('here', g.G)
         
-        pdy = GraphUtils.to_pydot(g.G)
+        pdy = to_pydot(g.G)
         image_data = pdy.create_png()
         print('here niowe')
 
@@ -288,7 +287,7 @@ def main():
             # Display generated data 
             if st.session_state.generated_data is not None:
                 st.subheader("True SCM Graph")
-                pdy = GraphUtils.to_pydot(st.session_state.true_graph)
+                pdy = to_pydot(st.session_state.true_graph)
                 image_data = pdy.create_png()
                 st.image(image_data, caption="True Causal Structure")
                 
@@ -350,10 +349,10 @@ def main():
             with st.spinner('Performing FCI Analysis...'):
                 try:
                     if test_algorithm == "FCI":
-                        g, edges = FCI_helper_classes.run_FCI_analysis(dataframe, test_type, p_value, bk)
+                        g, edges = run_FCI_analysis(dataframe, test_type, p_value, bk)
                         display_FCI_results(g, edges)
                         if st.session_state.generated_data is not None:
-                            true_perc, false_perc, partial_perc = FCI_helper_classes.calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
+                            true_perc, false_perc, partial_perc = calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
                             st.subheader("Graph Accuracy Results")
                             col1, col2, col3 = st.columns(3)
                             col1.metric(label="Perfectly identified edges", value=f"{true_perc:.2f}%")
@@ -365,7 +364,7 @@ def main():
                         g = pc_remake(data, indep_test=test_type, alpha=p_value, background_knowledge=bk, mvpc=mvpc)
                         display_PC_results(g)
                         if st.session_state.generated_data is not None:
-                            true_perc, false_perc, partial_perc = FCI_helper_classes.calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
+                            true_perc, false_perc, partial_perc = calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
                             st.subheader("Graph Accuracy Results")
                             col1, col2, col3 = st.columns(3)
                             col1.metric(label="Perfectly identified edges", value=f"{true_perc:.2f}%")

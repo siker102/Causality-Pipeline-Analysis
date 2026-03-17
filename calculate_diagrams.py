@@ -1,9 +1,15 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from causallearn.graph.Edge import Edge, Endpoint
-from causallearn.search.ConstraintBased.FCI import fci
-from causallearn.utils.GraphUtils import GraphUtils
+from causal_discovery.graph.edge import Edge
+from causal_discovery.graph.endpoint import Endpoint
+from causal_discovery.graph.general_graph import GeneralGraph
+from causal_discovery.graph.graph_node import GraphNode
+from causal_discovery.graph.causal_graph import CausalGraph
+from causal_discovery.knowledge.background_knowledge import BackgroundKnowledge
+from causal_discovery.fci.fci_algorithm import fci_remake
+from causal_discovery.fci.fci_helpers import calculate_accuracy_of_graphs
+from causal_discovery.pc.pc_algorithm import pc_remake
 from typing import List, Optional, Dict, Tuple
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
@@ -11,21 +17,12 @@ from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
 from rpy2.robjects.conversion import localconverter
 from collections import OrderedDict
-from causallearn.graph.GeneralGraph import GeneralGraph
-from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
-from causallearn.graph.GraphNode import GraphNode
 import networkx as nx
 import matplotlib.pyplot as plt
 from rpy2.rinterface_lib.embedded import RRuntimeError
-from FCI_causallearn_remake_with_background_controls import fci_remake
-import PC_remake
 import background_knowledge_controls
 import random_scm_generation
 import IDP_helper_classes
-import FCI_helper_classes
-from causallearn.search.ConstraintBased.PC import pc
-from causallearn.graph.GraphClass import CausalGraph
-from PC_remake import pc_remake
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,14 +34,14 @@ def fci_call(generated_data, true_graph, condition, p_value):
         raise ValueError(f"Invalid p_value: {p_value}. It must be a float between 0 and 1.")
     p_value = float(p_value)
     g, edges = fci_remake(dataset=generated_data.to_numpy(), independence_test_method=condition, alpha=p_value)
-    correct_percentage, falsely_percentage, partial_percentage = FCI_helper_classes.calculate_accuracy_of_graphs(g,true_graph)
+    correct_percentage, falsely_percentage, partial_percentage = calculate_accuracy_of_graphs(g,true_graph)
     return correct_percentage, falsely_percentage, partial_percentage
     
 def PC_call(generated_data, true_graph, condition, p_value):
     """FCI!!!"""
     p_value = float(p_value)
-    g = PC_remake.pc_remake(data=generated_data.to_numpy(), indep_test=condition, alpha=p_value)
-    correct_percentage, falsely_percentage, partial_percentage = FCI_helper_classes.calculate_accuracy_of_graphs(g.G,true_graph)
+    g = pc_remake(data=generated_data.to_numpy(), indep_test=condition, alpha=p_value)
+    correct_percentage, falsely_percentage, partial_percentage = calculate_accuracy_of_graphs(g.G,true_graph)
     return correct_percentage, falsely_percentage, partial_percentage
     
 

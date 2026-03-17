@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from causallearn.graph.Edge import Edge, Endpoint
-from causallearn.search.ConstraintBased.FCI import fci
-from causallearn.utils.GraphUtils import GraphUtils
+from causal_discovery.graph.edge import Edge
+from causal_discovery.graph.endpoint import Endpoint
+from causal_discovery.graph.general_graph import GeneralGraph
 from typing import List, Optional, Dict, Tuple
 import rpy2.robjects as ro
 from rpy2.robjects import pandas2ri
@@ -11,14 +11,9 @@ from rpy2.robjects import numpy2ri
 from rpy2.robjects.packages import importr
 from rpy2.robjects.conversion import localconverter
 from collections import OrderedDict
-from causallearn.graph.GeneralGraph import GeneralGraph
-from causallearn.utils.PCUtils.BackgroundKnowledge import BackgroundKnowledge
-from causallearn.graph.GraphNode import GraphNode
 import networkx as nx
 import matplotlib.pyplot as plt
 from rpy2.rinterface_lib.embedded import RRuntimeError
-import background_knowledge_controls
-import random_scm_generation
 from rpy2.robjects import globalenv
 
 
