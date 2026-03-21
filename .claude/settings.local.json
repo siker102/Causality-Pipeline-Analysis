@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python -m pytest tests/test_idp_cidp.py -v --tb=short -k \"not CrossValidation\")",
+      "Bash(python -m pytest tests/test_idp_cidp.py -v --tb=long -k \"CrossValidation\")",
+      "Bash(python -m pytest tests/test_idp_cidp.py -v --tb=short -k \"CrossValidation\")",
+      "Bash(python -m pytest tests/test_idp_cidp.py -v)",
+      "Bash(python -m pytest tests/test_idp_cidp.py -v --timeout=60 -x)",
+      "Bash(python -m pytest tests/test_idp_cidp.py -v -x)",
+      "Bash(python -m pytest tests/ -v -x)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''causality_pipeline.py''\\).read\\(\\)\\); print\\(''Syntax OK''\\)\")"
     ]
   }
 }

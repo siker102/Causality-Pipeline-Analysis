@@ -11,21 +11,15 @@ from causal_discovery.utils.visualization import to_pydot
 from causal_discovery.fci.fci_helpers import run_FCI_analysis, calculate_accuracy_of_graphs
 from causal_discovery.pc.pc_algorithm import pc_remake
 from typing import List, Optional, Dict, Tuple
-import rpy2.robjects as ro
-from rpy2.robjects import pandas2ri
-from rpy2.robjects import numpy2ri
-from rpy2.robjects.packages import importr
-from rpy2.robjects.conversion import localconverter
 from collections import OrderedDict
 import networkx as nx
 import matplotlib.pyplot as plt
-from rpy2.rinterface_lib.embedded import RRuntimeError
 import background_knowledge_controls
 import random_scm_generation
-import IDP_helper_classes
+from causal_discovery.idp_and_cidp.idp import idp
+from causal_discovery.idp_and_cidp.cidp import cidp
 
 # Constants
-R_PACKAGES  = ['rlang','cli', 'dagitty', 'pcalg', 'PAGId']
 FCI_EDGE_ENCODING = {
     'CIRCLE' : 1,
     'ARROW' : 2,
@@ -35,50 +29,6 @@ FCI_EDGE_ENCODING = {
 # Streamlit config
 st.set_page_config(page_title="Data To Discovery", layout="wide")
 st.title('Data To Discovery')
-
-def install_r_packages():
-    """Install and load required R packages with proper error handling."""
-    try:
-        # Install devtools first if missing /done with docker fila but in case someone wants it local
-        try:
-            ro.r('library(devtools)')
-            st.success("devtools loaded successfully")
-        except RRuntimeError:
-            st.warning("devtools not found. Installing...")
-            ro.r('install.packages("devtools")')
-            ro.r('library(devtools)')
-
-        # Install core packages
-        for pkg in R_PACKAGES:
-            try:
-                ro.r(f'library({pkg})')
-                st.success(f"{pkg} loaded successfully")
-            except RRuntimeError:
-                st.warning(f"{pkg} not found. Installing...")
-                ro.r(f'install.packages("{pkg}")')
-                try:
-                    ro.r(f'library({pkg})')
-                    st.success(f"{pkg} installed and loaded")
-                except RRuntimeError as e:
-                    st.error(f"Failed to install {pkg}: {str(e)}")
-                    raise
-
-        # Install PAGId as well 
-        try:
-            ro.r('library(PAGId)')
-        except RRuntimeError:
-            st.warning("PAGId not found. Installing from GitHub...")
-            try:
-                ro.r('devtools::install_github("adele/PAGId", dependencies=TRUE)')
-                ro.r('library(PAGId)')
-                st.success("PAGId installed and loaded")
-            except RRuntimeError as e:
-                st.error(f"Failed to install PAGId: {str(e)}")
-                raise
-
-    except RRuntimeError as e:
-        st.error(f"Package management failed: {str(e)}")
-        raise RuntimeError("R package installation failed") from e
 
 def load_data(uploaded_file) -> Optional[pd.DataFrame]:
     """Load and preprocess data while preserving original columns."""
@@ -209,7 +159,7 @@ def display_PC_results(g: CausalGraph):
         print('here niowe')
 
         # Display image
-        st.image(image_data, caption="FCI Analysis Result, green arrow means definitely direct edge")
+        st.image(image_data, caption="PC Analysis Result (CPDAG: undirected edges = orientation undetermined)")
 
     except Exception as e:
         st.error(f"Graph visualization failed: {str(e)}")
@@ -226,158 +176,237 @@ def display_PC_results(g: CausalGraph):
         #st.write(f"Definitely direct edges: {', '.join([f'{edge.get_node1().get_name()} -> {edge.get_node2().get_name()}' for edge in visible_edges])}")
 
 
+def _run_idp_cidp_ui(g: GeneralGraph, edges: list[Edge]):
+    """Streamlit UI for IDP/CIDP causal effect identification."""
+    st.subheader("Causal Effect Identification")
+
+    node_names = [node.get_name() for node in g.get_nodes()]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        treatment = st.selectbox("Treatment variable (X):", node_names)
+    with col2:
+        outcome = st.selectbox("Outcome variable (Y):", node_names)
+
+    use_cidp = st.checkbox("Condition on variables (CIDP)", value=False)
+    conditioning = []
+    if use_cidp:
+        available_z = [n for n in node_names if n != treatment and n != outcome]
+        conditioning = st.multiselect("Conditioning variables (Z):", available_z)
+
+    if st.button("Identify Causal Effect"):
+        # Convert graph to pcalg-style adjacency matrix
+        amat = g.to_pcalg_matrix()
+
+        try:
+            if use_cidp and len(conditioning) > 0:
+                result = cidp(amat, [treatment], [outcome], conditioning, node_names, verbose=False)
+            else:
+                result = idp(amat, [treatment], [outcome], node_names, verbose=False)
+
+            st.write("### Results")
+            st.write(f"Query: {result.get('query')}")
+
+            if result['id']:
+                st.success("The causal effect is identifiable!")
+                Qexpr = result.get('Qexpr')
+                if Qexpr:
+                    steps_list = []
+                    st.write("### Identification Formula Steps")
+                    for step, formula in Qexpr.items():
+                        if isinstance(formula, np.ndarray):
+                            formula = formula[0]
+                        steps_list.append(step)
+                        steps_subscript = ",".join(steps_list)
+
+                        if step == list(Qexpr.keys())[-1]:
+                            complete_formula = rf"P({outcome}|do({treatment})) = " + str(formula)
+                        else:
+                            complete_formula = rf"P_{{{steps_subscript}}} = " + str(formula)
+                        st.latex(complete_formula)
+                else:
+                    st.write("No identification formula available.")
+            else:
+                st.error("The causal effect is not identifiable.")
+
+            # Save results in session state
+            if 'idp_results' not in st.session_state:
+                st.session_state.idp_results = []
+            st.session_state.idp_results.append({
+                'treatment': treatment,
+                'outcome': outcome,
+                'conditioning': conditioning if use_cidp else None,
+                'identifiable': result['id'],
+            })
+
+        except Exception as e:
+            st.error(f"Identification failed: {str(e)}")
+
+    # Display previously queried results
+    if 'idp_results' in st.session_state and st.session_state.idp_results:
+        st.write("### Previous Results")
+        for res in st.session_state.idp_results:
+            cond_str = f" | {','.join(res['conditioning'])}" if res.get('conditioning') else ""
+            icon = "+" if res['identifiable'] else "-"
+            st.write(f"P({res['outcome']}|do({res['treatment']}){cond_str}): "
+                      f"{'Identifiable' if res['identifiable'] else 'Not identifiable'}")
+
+
 def main():
     """Main function for the causal discovery pipeline"""
-    with localconverter(ro.default_converter + pandas2ri.converter + numpy2ri.converter):
 
-        # Initialize session state variables for consistent state management
-        if 'generated_data' not in st.session_state:
-            st.session_state.generated_data = None
-        if 'true_graph' not in st.session_state:
-            st.session_state.true_graph = None
-        
-        # Data Source Selector GUI
-        st.sidebar.subheader("Data Source Configuration")
+    # Initialize session state variables for consistent state management
+    if 'generated_data' not in st.session_state:
+        st.session_state.generated_data = None
+    if 'true_graph' not in st.session_state:
+        st.session_state.true_graph = None
 
-        data_source = st.sidebar.radio(
-            "Choose data source:",
-            ["Upload CSV", "Generate Random SCM"],
-            index=0,
-            on_change=lambda: background_knowledge_controls.reset_background_knowledge_state()
-        )
+    # Data Source Selector GUI
+    st.sidebar.subheader("Data Source Configuration")
 
-        dataframe = None
-        
-        if data_source == "Upload CSV":
-            uploaded_file = st.file_uploader('Upload CSV Data', type=['csv'])
-            if uploaded_file:
-                try:
-                    dataframe = load_data(uploaded_file)
-                    # Clear generated data when switching to upload mode
-                    st.session_state.generated_data = None
-                    st.session_state.true_graph = None
-                    with st.expander("View Uploaded Data"):
-                        st.dataframe(dataframe.head())
-                        st.dataframe(dataframe.describe())
-                except Exception as e:
-                    st.error(f"Error reading file: {str(e)}")
-                    return
-            
-        else:
-            # SCM Generation Controls
-            with st.sidebar.expander("SCM Parameters"):
-                num_vars = st.number_input("Number of variables", 3, 20, 5)
-                edge_prob = st.slider("Connection probability", 0.1, 0.5, 0.3)
-                noise_level = st.slider("Noise level (σ)", 0.1, 2.0, 1.0)
-                num_samples = st.number_input("Number of samples", 100, 10_000, 1000)
-                max_mean = st.slider("Max mean value", 0, 1000, 10)
-                max_coefficient = st.slider("Max coefficient value for relationship strength", 0, 1000, 10)
-            
-            if st.sidebar.button("Generate New SCM"):
-                #Reset background knowledge
-                background_knowledge_controls.reset_background_knowledge_state()
-                # Store the generated SCM in session state
-                generated_data, true_graph, equations = random_scm_generation.generate_random_scm(
-                    num_vars, edge_prob, noise_level, num_samples, max_mean, max_coefficient
-                )
-                st.session_state.generated_data = generated_data
-                st.session_state.true_graph = true_graph
-                st.session_state.scm_equations = equations
-                
-            # Display generated data 
-            if st.session_state.generated_data is not None:
-                st.subheader("True SCM Graph")
-                pdy = to_pydot(st.session_state.true_graph)
-                image_data = pdy.create_png()
-                st.image(image_data, caption="True Causal Structure")
-                
-                with st.expander("View Generated Data"):
-                    st.dataframe(st.session_state.generated_data.head())
-                    st.dataframe(st.session_state.generated_data.describe())
-        
-        
-                    st.subheader("Structural Causal Model Equations")
-                    for var in st.session_state.generated_data.columns:
-                        st.markdown(f"`{st.session_state.scm_equations[var]}`")
-                
-                dataframe = st.session_state.generated_data
+    data_source = st.sidebar.radio(
+        "Choose data source:",
+        ["Upload CSV", "Generate Random SCM"],
+        index=0,
+        on_change=lambda: background_knowledge_controls.reset_background_knowledge_state()
+    )
 
-        if dataframe is None:
-            st.info("Please configure data source to begin analysis.")
-            return
-        
-        # Pcik CI test gui
-        st.subheader("Analysis Configuration")
-        test_algorithm = st.radio(
-            "Algorithm Type:",
-            options=['FCI', 'PC'],
-            captions=[
-                'When you expect unobserved latent confounding.',
-                'When you have causal sufficiency',
-            ],
-            horizontal=True
-        )
-        test_type = st.radio(
-            "Independence Test Type:",
-            options=['fisherz', 'chisq', 'gsq', 'kci', 'mv_fisherz'],
-            captions=[
-                'Fisher Z-test',
-                'Chi-squared test',
-                'G-squared test',
-                'Kernel-based Conditional Independence test',
-                'Missing-value Fisher Z test (use if your data has missing values)'
-            ],
-            horizontal=True
-        )
+    dataframe = None
 
-        
+    if data_source == "Upload CSV":
+        uploaded_file = st.file_uploader('Upload CSV Data', type=['csv'])
+        if uploaded_file:
+            try:
+                dataframe = load_data(uploaded_file)
+                # Clear generated data when switching to upload mode
+                st.session_state.generated_data = None
+                st.session_state.true_graph = None
+                with st.expander("View Uploaded Data"):
+                    st.dataframe(dataframe.head())
+                    st.dataframe(dataframe.describe())
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
+                return
 
-        # P-value input
-        p_value = st.number_input(
-            "P-value for conditional dependency calculations of the FCI algorithm:",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.05,
-            step=0.01,
-            format="%.3f"
-        )
+    else:
+        # SCM Generation Controls
+        with st.sidebar.expander("SCM Parameters"):
+            num_vars = st.number_input("Number of variables", 3, 20, 5)
+            edge_prob = st.slider("Connection probability", 0.1, 0.5, 0.3)
+            noise_level = st.slider("Noise level (σ)", 0.1, 2.0, 1.0)
+            num_samples = st.number_input("Number of samples", 100, 10_000, 1000)
+            max_mean = st.slider("Max mean value", 0, 1000, 10)
+            max_coefficient = st.slider("Max coefficient value for relationship strength", 0, 1000, 10)
 
-        bk = background_knowledge_controls.get_background_knowledge(dataframe)
+        if st.sidebar.button("Generate New SCM"):
+            #Reset background knowledge
+            background_knowledge_controls.reset_background_knowledge_state()
+            # Store the generated SCM in session state
+            generated_data, true_graph, equations = random_scm_generation.generate_random_scm(
+                num_vars, edge_prob, noise_level, num_samples, max_mean, max_coefficient
+            )
+            st.session_state.generated_data = generated_data
+            st.session_state.true_graph = true_graph
+            st.session_state.scm_equations = equations
 
-        run_analysis = st.checkbox('Run FCI Analysis', value=False)
-        if run_analysis:
-            with st.spinner('Performing FCI Analysis...'):
-                try:
-                    if test_algorithm == "FCI":
-                        g, edges = run_FCI_analysis(dataframe, test_type, p_value, bk)
-                        display_FCI_results(g, edges)
-                        if st.session_state.generated_data is not None:
-                            true_perc, false_perc, partial_perc = calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
-                            st.subheader("Graph Accuracy Results")
-                            col1, col2, col3 = st.columns(3)
-                            col1.metric(label="Perfectly identified edges", value=f"{true_perc:.2f}%")
-                            col2.metric(label="Falsely identified", value=f"{false_perc:.2f}%")
-                            col3.metric(label="Partially True Identified (exclusive true)", value=f"{partial_perc:.2f}%")
-                    else:
-                        mvpc = not dataframe.isnull().values.any()  # Set mvpc to True if there are no missing values
-                        data = dataframe.to_numpy()
-                        g = pc_remake(data, indep_test=test_type, alpha=p_value, background_knowledge=bk, mvpc=mvpc)
-                        display_PC_results(g)
-                        if st.session_state.generated_data is not None:
-                            true_perc, false_perc, partial_perc = calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
-                            st.subheader("Graph Accuracy Results")
-                            col1, col2, col3 = st.columns(3)
-                            col1.metric(label="Perfectly identified edges", value=f"{true_perc:.2f}%")
-                            col2.metric(label="Falsely identified", value=f"{false_perc:.2f}%")
-                    with st.expander("IDP Analysis"):
-                        if st.checkbox("Run IDP Analysis"):
-                            install_r_packages()
-                            st.divider()
-                            IDP_helper_classes.IDP_call_and_streamlit(g, edges)
+        # Display generated data
+        if st.session_state.generated_data is not None:
+            st.subheader("True SCM Graph")
+            pdy = to_pydot(st.session_state.true_graph)
+            image_data = pdy.create_png()
+            st.image(image_data, caption="True Causal Structure")
 
-                except Exception as e:
-                    st.error(f"Analysis failed: {str(e)}")
-                    st.stop()
+            with st.expander("View Generated Data"):
+                st.dataframe(st.session_state.generated_data.head())
+                st.dataframe(st.session_state.generated_data.describe())
+
+
+                st.subheader("Structural Causal Model Equations")
+                for var in st.session_state.generated_data.columns:
+                    st.markdown(f"`{st.session_state.scm_equations[var]}`")
+
+            dataframe = st.session_state.generated_data
+
+    if dataframe is None:
+        st.info("Please configure data source to begin analysis.")
+        return
+
+    # Pick CI test gui
+    st.subheader("Analysis Configuration")
+    test_algorithm = st.radio(
+        "Algorithm Type:",
+        options=['FCI', 'PC'],
+        captions=[
+            'When you expect unobserved latent confounding.',
+            'When you have causal sufficiency',
+        ],
+        horizontal=True
+    )
+    test_type = st.radio(
+        "Independence Test Type:",
+        options=['fisherz', 'chisq', 'gsq', 'kci', 'mv_fisherz'],
+        captions=[
+            'Fisher Z-test',
+            'Chi-squared test',
+            'G-squared test',
+            'Kernel-based Conditional Independence test',
+            'Missing-value Fisher Z test (use if your data has missing values)'
+        ],
+        horizontal=True
+    )
+
+    # P-value input
+    p_value = st.number_input(
+        "P-value for conditional dependency calculations of the FCI algorithm:",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.05,
+        step=0.01,
+        format="%.3f"
+    )
+
+    bk = background_knowledge_controls.get_background_knowledge(dataframe)
+
+    run_analysis = st.checkbox('Run FCI Analysis', value=False)
+    if run_analysis:
+        with st.spinner('Performing FCI Analysis...'):
+            try:
+                if test_algorithm == "FCI":
+                    g, edges = run_FCI_analysis(dataframe, test_type, p_value, bk)
+                    display_FCI_results(g, edges)
+                    if st.session_state.generated_data is not None:
+                        accuracy = calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
+                        st.subheader("Graph Accuracy Results")
+                        col1, col2, col3, col4, col5 = st.columns(5)
+                        col1.metric(label="Correctly identified", value=f"{accuracy['correct']}/{accuracy['total_true']}")
+                        col2.metric(label="Partially oriented", value=accuracy['partial'])
+                        col3.metric(label="Wrongly oriented", value=accuracy['wrong_orient'])
+                        col4.metric(label="Missing edges", value=accuracy['missing'])
+                        col5.metric(label="Spurious edges", value=accuracy['spurious'])
+                else:
+                    mvpc = dataframe.isnull().values.any()  # Use MVPC only when data has missing values
+                    data = dataframe.to_numpy()
+                    node_names = dataframe.columns.tolist()
+                    g = pc_remake(data, indep_test=test_type, alpha=p_value, background_knowledge=bk, mvpc=mvpc, node_names=node_names)
+                    display_PC_results(g)
+                    if st.session_state.generated_data is not None:
+                        accuracy = calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
+                        st.subheader("Graph Accuracy Results")
+                        col1, col2, col3, col4, col5 = st.columns(5)
+                        col1.metric(label="Correctly identified", value=f"{accuracy['correct']}/{accuracy['total_true']}")
+                        col2.metric(label="Partially oriented", value=accuracy['partial'])
+                        col3.metric(label="Wrongly oriented", value=accuracy['wrong_orient'])
+                        col4.metric(label="Missing edges", value=accuracy['missing'])
+                        col5.metric(label="Spurious edges", value=accuracy['spurious'])
+
+                # IDP/CIDP Analysis (only for FCI which produces PAGs)
+                if test_algorithm == "FCI":
+                    with st.expander("Causal Effect Identification (IDP/CIDP)"):
+                        _run_idp_cidp_ui(g, edges)
+
+            except Exception as e:
+                st.error(f"Analysis failed: {str(e)}")
+                st.stop()
 
 if __name__ == "__main__":
     main()

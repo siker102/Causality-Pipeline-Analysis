@@ -976,8 +976,8 @@ class GeneralGraph:
                     return 3
                 return 0
 
-            # amat[i,j] = endpoint at j (on the i->j side)
-            amat[i, j] = _ep_to_pcalg(ep1)
-            amat[j, i] = _ep_to_pcalg(ep2)
+            # amat[i,j] = endpoint at j (on the i-j edge)
+            amat[i, j] = _ep_to_pcalg(ep2)
+            amat[j, i] = _ep_to_pcalg(ep1)
 
         return amat

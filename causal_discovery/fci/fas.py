@@ -23,8 +23,6 @@ def fas_remake(data: ndarray, nodes: List[Node], independence_test_method: CIT_B
     Implements the "fast adjacency search" used in several causal algorithms.
     """
     ## ------- check parameters ------------
-    print(alpha)
-    print(type(alpha))
     if type(data) != np.ndarray:
         raise TypeError("'data' must be 'np.ndarray' type!")
     if not all(isinstance(node, Node) for node in nodes):
@@ -69,21 +67,6 @@ def fas_remake(data: ndarray, nodes: List[Node], independence_test_method: CIT_B
                 continue
             for y in Neigh_x:
                 sepsets = set()
-                if (knowledge is not None and
-                    knowledge.is_forbidden(cg.G.nodes[x], cg.G.nodes[y])
-                    and knowledge.is_forbidden(cg.G.nodes[y], cg.G.nodes[x])):
-                    print('Hi')
-                    if not stable:
-                        remove_if_exists(x, y)
-                        remove_if_exists(y, x)
-                        append_value(cg.sepset, x, y, ())
-                        append_value(cg.sepset, y, x, ())
-                        sep_sets[(x, y)] = set()
-                        sep_sets[(y, x)] = set()
-                        break
-                    else:
-                        edge_removal.add((x, y))
-                        edge_removal.add((y, x))
 
                 Neigh_x_noy = np.delete(Neigh_x, np.where(Neigh_x == y))
                 for S in combinations(Neigh_x_noy, current_depth):

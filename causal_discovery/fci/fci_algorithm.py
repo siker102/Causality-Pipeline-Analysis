@@ -16,48 +16,6 @@ from causal_discovery.fci.fas import fas_remake
 from causallearn.utils.cit import *
 
 
-def print_background_knowledge(bg_knowledge: BackgroundKnowledge):
-    print("=== Background Knowledge ===")
-    print("\nForbidden Rules (Specific Nodes):")
-    if bg_knowledge.forbidden_rules_specs:
-        for from_node, to_node in bg_knowledge.forbidden_rules_specs:
-            print(f"  {from_node} -> {to_node}")
-    else:
-        print("  None")
-    print("\nForbidden Rules (Pattern-Based):")
-    if bg_knowledge.forbidden_pattern_rules_specs:
-        for from_pattern, to_pattern in bg_knowledge.forbidden_pattern_rules_specs:
-            print(f"  {from_pattern} -> {to_pattern}")
-    else:
-        print("  None")
-    print("\nRequired Rules (Specific Nodes):")
-    if bg_knowledge.required_rules_specs:
-        for from_node, to_node in bg_knowledge.required_rules_specs:
-            print(f"  {from_node} -> {to_node}")
-    else:
-        print("  None")
-    print("\nRequired Rules (Pattern-Based):")
-    if bg_knowledge.required_pattern_rules_specs:
-        for from_pattern, to_pattern in bg_knowledge.required_pattern_rules_specs:
-            print(f"  {from_pattern} -> {to_pattern}")
-    else:
-        print("  None")
-    print("\nTier Map:")
-    if bg_knowledge.tier_map:
-        for tier, nodes in sorted(bg_knowledge.tier_map.items()):
-            node_list = ", ".join(str(node) for node in nodes)
-            print(f"  Tier {tier}: {node_list}")
-    else:
-        print("  None")
-    print("\nTier Value Map:")
-    if bg_knowledge.tier_value_map:
-        for node, tier in bg_knowledge.tier_value_map.items():
-            print(f"  {node}: Tier {tier}")
-    else:
-        print("  None")
-    print("\n============================")
-
-
 def traverseSemiDirected(node: Node, edge: Edge) -> Node | None:
     if node == edge.get_node1():
         if edge.get_endpoint1() == Endpoint.TAIL or edge.get_endpoint1() == Endpoint.CIRCLE:
@@ -202,40 +160,36 @@ def getPossibleDsep(node_x: Node, node_y: Node, graph: GeneralGraph, maxPathLeng
 def fci_orient_bk(bk: BackgroundKnowledge | None, graph: GeneralGraph):
     if bk is None:
         return
-    print("Starting BK Orientation. NEW ALGORITHM")
-    print(graph)
+
     edges = graph.get_graph_edges()
-    edges_to_remove = []
-    print_background_knowledge(bk)
+    edges_to_orient_bidirected = []
     for edge in edges:
         node1, node2 = edge.get_node1(), edge.get_node2()
-        print(f"Node1: ",[edge.get_node1().get_name()], "Node2:" ,[edge.get_node2().get_name()])
         if bk.is_forbidden(node1, node2) and bk.is_forbidden(node2, node1):
             if not (bk.is_required(node1, node2) or bk.is_required(node2, node1)):
-                edges_to_remove.append(edge)
-    for edge in edges_to_remove:
+                edges_to_orient_bidirected.append(edge)
+    for edge in edges_to_orient_bidirected:
+        node1, node2 = edge.get_node1(), edge.get_node2()
         graph.remove_edge(edge)
-        print(f"Removed edge {edge} as both directions are forbidden and not required.")
+        graph.add_edge(Edge(node1, node2, Endpoint.ARROW, Endpoint.ARROW))
+
     edges = graph.get_graph_edges()
     for edge in edges:
         node1, node2 = edge.get_node1(), edge.get_node2()
         if bk.is_required(node1, node2):
             graph.remove_edge(edge)
             graph.add_directed_edge(node1, node2)
-            print(f"Orienting required edge: {node1.get_name()} -> {node2.get_name()}")
         elif bk.is_required(node2, node1):
             graph.remove_edge(edge)
             graph.add_directed_edge(node2, node1)
-            print(f"Orienting required edge: {node2.get_name()} -> {node1.get_name()}")
+        elif bk.is_forbidden(node1, node2) and bk.is_forbidden(node2, node1):
+            continue  # already handled as bidirected above
         elif bk.is_forbidden(node1, node2):
             graph.remove_edge(edge)
-            graph.add_directed_edge(node2, node1)
-            print(f"Orienting edge (forbidden in one direction): {node2.get_name()} -> {node1.get_name()}")
+            graph.add_edge(Edge(node1, node2, Endpoint.ARROW, Endpoint.CIRCLE))
         elif bk.is_forbidden(node2, node1):
             graph.remove_edge(edge)
-            graph.add_directed_edge(node1, node2)
-            print(f"Orienting edge (forbidden in one direction): {node1.get_name()} -> {node2.get_name()}")
-    print("Finishing BK Orientation.")
+            graph.add_edge(Edge(node1, node2, Endpoint.CIRCLE, Endpoint.ARROW))
 
 
 def is_arrow_point_allowed(node_x: Node, node_y: Node, graph: GeneralGraph, knowledge: BackgroundKnowledge | None) -> bool:
@@ -245,11 +199,6 @@ def is_arrow_point_allowed(node_x: Node, node_y: Node, graph: GeneralGraph, know
         return False
     if knowledge is not None and knowledge.is_forbidden(node_x, node_y):
         return False
-    if knowledge is not None:
-        tier_x = knowledge.tier_value_map.get(node_x.get_name())
-        tier_y = knowledge.tier_value_map.get(node_y.get_name())
-        if tier_x is not None and tier_y is not None and tier_x > tier_y:
-            return False
     if knowledge is not None and knowledge.is_required(node_y, node_x):
         return False
     return graph.get_endpoint(node_x, node_y) == Endpoint.CIRCLE

@@ -97,63 +97,74 @@ def get_color_edges(graph: GeneralGraph) -> List[Edge]:
     return edges
 
 
-def calculate_accuracy_of_graphs(g: GeneralGraph, true_graph: GeneralGraph) -> Tuple[float, float, float]:
-    """Calculates the accuracy of the transformation from DAG to PAG"""
+def calculate_accuracy_of_graphs(g: GeneralGraph, true_graph: GeneralGraph) -> dict:
+    """Compare output graph (PAG or CPDAG) to true DAG and return accuracy counts.
+
+    Returns a dict with keys:
+        correct       - edge found with exactly matching endpoints
+        partial       - edge found but at least one endpoint is uncertain (circle) or undirected (TAIL-TAIL in CPDAG)
+        wrong_orient  - edge found but orientation is specifically wrong
+        missing       - edge in true graph not found in output
+        spurious      - edge in output not in true graph
+        total_true    - total edges in true graph
+        total_output  - total edges in output graph
+    """
     true_edges: list[Edge] = true_graph.get_graph_edges()
     g_edges: list[Edge] = g.get_graph_edges()
 
-    total_true = len(true_edges)
-    total_g = len(g_edges)
+    # Build lookup: frozenset of node pair → output edge
+    g_edge_by_pair: dict = {}
+    for edge in g_edges:
+        key = frozenset([edge.get_node1(), edge.get_node2()])
+        g_edge_by_pair[key] = edge
 
-    correct_count = 0
-    partial_count = 0
-    false_count_in_true = 0
-    false_count_extra = 0
-    missing_edges_count = 0
-
-    true_node_pairs = set((edge.get_node1(), edge.get_node2()) for edge in true_edges)
+    true_pairs: set = set()
+    correct = 0
+    partial = 0
+    wrong_orient = 0
+    missing = 0
 
     for true_edge in true_edges:
-        x_true, y_true = true_edge.get_node1(), true_edge.get_node2()
-        found = False
-        for g_edge in g_edges:
-            x_g, y_g = g_edge.get_node1(), g_edge.get_node2()
-            if x_g == x_true and y_g == y_true:
-                true_ep = (true_edge.get_endpoint1(), true_edge.get_endpoint2())
-                g_ep = (g_edge.get_endpoint1(), g_edge.get_endpoint2())
+        n1, n2 = true_edge.get_node1(), true_edge.get_node2()
+        true_pairs.add(frozenset([n1, n2]))
+        key = frozenset([n1, n2])
 
-                if true_ep == g_ep:
-                    correct_count += 1
-                else:
-                    if g_ep[0].value == 2 and g_ep[1].value == 2:
-                        partial_count += 1
-                    else:
-                        correct = 0
-                        circle = 0
-                        for i in range(2):
-                            if g_ep[i] == true_ep[i]:
-                                correct += 1
-                            elif g_ep[i].value == 2:
-                                circle += 1
-                        if correct == 1 and circle == 1:
-                            partial_count += 1
-                        else:
-                            false_count_in_true += 1
-                found = True
-                break
-        if not found:
-            missing_edges_count += 1
+        if key not in g_edge_by_pair:
+            missing += 1
+            continue
 
-    for g_edge in g_edges:
-        x_g, y_g = g_edge.get_node1(), g_edge.get_node2()
-        if (x_g, y_g) not in true_node_pairs:
-            false_count_extra += 1
+        g_edge = g_edge_by_pair[key]
+        # Align g_edge endpoints to true_edge node ordering
+        if g_edge.get_node1() == n1:
+            g_ep1, g_ep2 = g_edge.get_endpoint1(), g_edge.get_endpoint2()
+        else:
+            g_ep1, g_ep2 = g_edge.get_endpoint2(), g_edge.get_endpoint1()
 
-    correct_percentage = (correct_count / total_true * 100) if total_true != 0 else 1.0
-    falsely_percentage = ((false_count_in_true + false_count_extra + missing_edges_count) / total_g * 100) if total_g != 0 else 0.0
-    partial_percentage = (partial_count / total_true * 100) if total_true != 0 else 0.0
+        true_ep1, true_ep2 = true_edge.get_endpoint1(), true_edge.get_endpoint2()
 
-    return (correct_percentage, falsely_percentage, partial_percentage)
+        if g_ep1 == true_ep1 and g_ep2 == true_ep2:
+            correct += 1
+        elif (g_ep1 == Endpoint.CIRCLE or g_ep2 == Endpoint.CIRCLE or
+              (g_ep1 == Endpoint.TAIL and g_ep2 == Endpoint.TAIL)):
+            # Uncertain (FCI circles) or undirected (CPDAG TAIL-TAIL)
+            partial += 1
+        else:
+            wrong_orient += 1
+
+    spurious = sum(
+        1 for edge in g_edges
+        if frozenset([edge.get_node1(), edge.get_node2()]) not in true_pairs
+    )
+
+    return {
+        'correct': correct,
+        'partial': partial,
+        'wrong_orient': wrong_orient,
+        'missing': missing,
+        'spurious': spurious,
+        'total_true': len(true_edges),
+        'total_output': len(g_edges),
+    }
 
 
 def hash_background_knowledge(bk: BackgroundKnowledge) -> int:

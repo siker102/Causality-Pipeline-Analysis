@@ -2,7 +2,6 @@ streamlit
 pandas
 numpy
 causal-learn  # only causallearn.utils.cit (CI tests) is used; graph classes are in causal_discovery/
-rpy2
 pydot
 graphviz
 networkx

@@ -1,12 +1,19 @@
 # Causality Pipeline
 
-Traditional data analysis methods predominantly rely on observational data, which imposes limits regarding the identifiability of causal structures. Interventional data helps establish a cause-and-effect relationship by breaking the influence of confounding variables. In some cases, counterfactuals pertaining to interventional data can be derived from just observational data. This pipeline can be used to derive counterfactuals from observational data, with user-friendly, descriptive AI to guide users to achieve the best possible results.s
+Traditional data analysis methods predominantly rely on observational data, which imposes limits regarding the identifiability of causal structures. Interventional data helps establish a cause-and-effect relationship by breaking the influence of confounding variables. In some cases, counterfactuals pertaining to interventional data can be derived from just observational data. This pipeline can be used to derive counterfactuals from observational data, with user-friendly, descriptive AI to guide users to achieve the best possible results.
+
+## Features
+
+- **Causal discovery** via FCI and PC algorithms with configurable independence tests and background knowledge
+- **Causal effect identification** via IDP and CIDP algorithms — determines whether P(y|do(x)) or P(y|do(x),z) is identifiable from a PAG and provides the identification formula
+- CSV upload or random SCM generation for testing
+- Graph visualization with edge property annotations
 
 ## Requirements
 
 - Docker
 
-For local installation, check the requirements (or run the program and install the dependencies it will tell you it needs)
+For local installation: `pip install -r requirements.txt`, then `python -m streamlit run causality_pipeline.py`.
 
 ## Getting Started
 
@@ -20,8 +27,8 @@ For local installation, check the requirements (or run the program and install t
     docker run -p 8501:8501 causality-pipeline
     ```
 
-3. Open your web browser and go to `http://localhost:8501` to see the application.
+3. Open your web browser and go to `http://localhost:8501`.
 
-## Additional Information
+## Acknowledgements
 
-The docker container RIGHT NOW does not support IDP right now, because of difficulties with RPY2, Docker and the PAGId library. To access full functionality download the program and install depenendencies, then start it via "python -m streamlit run causality_pipeline.py".
+The IDP and CIDP algorithms in `causal_discovery/idp_and_cidp/` are Python ports of the [PAGId](https://github.com/adele/PAGId) R package by Adèle H. Ribeiro. The original R source is included in `R code/PAGId/` for reference and cross-validation testing.

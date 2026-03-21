@@ -1,31 +1,9 @@
-import streamlit as st
-import pandas as pd
 import numpy as np
-from causal_discovery.graph.edge import Edge
-from causal_discovery.graph.endpoint import Endpoint
-from causal_discovery.graph.general_graph import GeneralGraph
-from causal_discovery.graph.graph_node import GraphNode
-from causal_discovery.graph.causal_graph import CausalGraph
-from causal_discovery.knowledge.background_knowledge import BackgroundKnowledge
+import matplotlib.pyplot as plt
 from causal_discovery.fci.fci_algorithm import fci_remake
 from causal_discovery.fci.fci_helpers import calculate_accuracy_of_graphs
 from causal_discovery.pc.pc_algorithm import pc_remake
-from typing import List, Optional, Dict, Tuple
-import rpy2.robjects as ro
-from rpy2.robjects import pandas2ri
-from rpy2.robjects import numpy2ri
-from rpy2.robjects.packages import importr
-from rpy2.robjects.conversion import localconverter
-from collections import OrderedDict
-import networkx as nx
-import matplotlib.pyplot as plt
-from rpy2.rinterface_lib.embedded import RRuntimeError
-import background_knowledge_controls
 import random_scm_generation
-import IDP_helper_classes
-
-import numpy as np
-import matplotlib.pyplot as plt
 
 
 def fci_call(generated_data, true_graph, condition, p_value):
