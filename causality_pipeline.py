@@ -377,44 +377,72 @@ def main():
 
     run_analysis = st.checkbox('Run FCI Analysis', value=False, key='run_analysis')
     if run_analysis:
-        with st.spinner('Performing FCI Analysis...'):
-            try:
-                if test_algorithm == "FCI":
-                    g, edges = run_FCI_analysis(dataframe, test_type, p_value, bk)
-                    display_FCI_results(g, edges)
-                    if st.session_state.generated_data is not None:
-                        accuracy = calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
-                        st.subheader("Graph Accuracy Results")
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        col1.metric(label="Correctly identified", value=f"{accuracy['correct']}/{accuracy['total_true']}")
-                        col2.metric(label="Partially oriented", value=accuracy['partial'])
-                        col3.metric(label="Wrongly oriented", value=accuracy['wrong_orient'])
-                        col4.metric(label="Missing edges", value=accuracy['missing'])
-                        col5.metric(label="Spurious edges", value=accuracy['spurious'])
-                else:
-                    mvpc = dataframe.isnull().values.any()  # Use MVPC only when data has missing values
-                    data = dataframe.to_numpy()
-                    node_names = dataframe.columns.tolist()
-                    g = pc_remake(data, indep_test=test_type, alpha=p_value, background_knowledge=bk, mvpc=mvpc, node_names=node_names)
-                    display_PC_results(g)
-                    if st.session_state.generated_data is not None:
-                        accuracy = calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
-                        st.subheader("Graph Accuracy Results")
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        col1.metric(label="Correctly identified", value=f"{accuracy['correct']}/{accuracy['total_true']}")
-                        col2.metric(label="Partially oriented", value=accuracy['partial'])
-                        col3.metric(label="Wrongly oriented", value=accuracy['wrong_orient'])
-                        col4.metric(label="Missing edges", value=accuracy['missing'])
-                        col5.metric(label="Spurious edges", value=accuracy['spurious'])
+        # Build a cache key from the analysis parameters
+        bk_forbidden = frozenset((str(a), str(b)) for a, b in bk.forbidden_rules_specs)
+        bk_required = frozenset((str(a), str(b)) for a, b in bk.required_rules_specs)
+        bk_tiers = frozenset((k, frozenset(str(n) for n in v)) for k, v in bk.tier_map.items())
+        cache_key = (
+            test_algorithm,
+            test_type,
+            p_value,
+            id(dataframe),
+            bk_forbidden,
+            bk_required,
+            bk_tiers,
+        )
 
-                # IDP/CIDP Analysis (only for FCI which produces PAGs)
-                if test_algorithm == "FCI":
-                    with st.expander("Causal Effect Identification (IDP/CIDP)"):
-                        _run_idp_cidp_ui(g, edges)
+        # Only recompute if inputs changed
+        if st.session_state.get('_analysis_cache_key') != cache_key:
+            with st.spinner('Performing FCI Analysis...'):
+                try:
+                    if test_algorithm == "FCI":
+                        g, edges = run_FCI_analysis(dataframe, test_type, p_value, bk)
+                        st.session_state['_cached_fci_result'] = (g, edges)
+                    else:
+                        mvpc = dataframe.isnull().values.any()
+                        data = dataframe.to_numpy()
+                        node_names = dataframe.columns.tolist()
+                        g = pc_remake(data, indep_test=test_type, alpha=p_value, background_knowledge=bk, mvpc=mvpc, node_names=node_names)
+                        st.session_state['_cached_pc_result'] = g
+                    st.session_state['_analysis_cache_key'] = cache_key
+                except Exception as e:
+                    st.error(f"Analysis failed: {str(e)}")
+                    st.stop()
 
-            except Exception as e:
-                st.error(f"Analysis failed: {str(e)}")
-                st.stop()
+        try:
+            if test_algorithm == "FCI":
+                g, edges = st.session_state['_cached_fci_result']
+                display_FCI_results(g, edges)
+                if st.session_state.generated_data is not None:
+                    accuracy = calculate_accuracy_of_graphs(g=g, true_graph=st.session_state.true_graph)
+                    st.subheader("Graph Accuracy Results")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric(label="Correctly identified", value=f"{accuracy['correct']}/{accuracy['total_true']}")
+                    col2.metric(label="Partially oriented", value=accuracy['partial'])
+                    col3.metric(label="Wrongly oriented", value=accuracy['wrong_orient'])
+                    col4.metric(label="Missing edges", value=accuracy['missing'])
+                    col5.metric(label="Spurious edges", value=accuracy['spurious'])
+            else:
+                g = st.session_state['_cached_pc_result']
+                display_PC_results(g)
+                if st.session_state.generated_data is not None:
+                    accuracy = calculate_accuracy_of_graphs(g=g.G, true_graph=st.session_state.true_graph)
+                    st.subheader("Graph Accuracy Results")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric(label="Correctly identified", value=f"{accuracy['correct']}/{accuracy['total_true']}")
+                    col2.metric(label="Partially oriented", value=accuracy['partial'])
+                    col3.metric(label="Wrongly oriented", value=accuracy['wrong_orient'])
+                    col4.metric(label="Missing edges", value=accuracy['missing'])
+                    col5.metric(label="Spurious edges", value=accuracy['spurious'])
+
+            # IDP/CIDP Analysis (only for FCI which produces PAGs)
+            if test_algorithm == "FCI":
+                with st.expander("Causal Effect Identification (IDP/CIDP)"):
+                    _run_idp_cidp_ui(g, edges)
+
+        except Exception as e:
+            st.error(f"Analysis failed: {str(e)}")
+            st.stop()
 
 if __name__ == "__main__":
     main()
