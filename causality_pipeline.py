@@ -211,19 +211,27 @@ def _run_idp_cidp_ui(g: GeneralGraph, edges: list[Edge]):
                 st.success("The causal effect is identifiable!")
                 Qexpr = result.get('Qexpr')
                 if Qexpr:
-                    steps_list = []
+                    latex_lines = []
                     st.write("### Identification Formula Steps")
                     for step, formula in Qexpr.items():
                         if isinstance(formula, np.ndarray):
                             formula = formula[0]
-                        steps_list.append(step)
-                        steps_subscript = ",".join(steps_list)
 
                         if step == list(Qexpr.keys())[-1]:
                             complete_formula = rf"P({outcome}|do({treatment})) = " + str(formula)
                         else:
-                            complete_formula = rf"P_{{{steps_subscript}}} = " + str(formula)
+                            complete_formula = rf"P_{{{step}}} = " + str(formula)
+                        latex_lines.append(complete_formula)
                         st.latex(complete_formula)
+
+                    full_latex = "\n".join(latex_lines)
+                    st.code(full_latex, language="latex")
+                    st.download_button(
+                        "Download LaTeX",
+                        data=full_latex,
+                        file_name="causal_effect.tex",
+                        mime="text/plain",
+                    )
                 else:
                     st.write("No identification formula available.")
             else:
@@ -367,7 +375,7 @@ def main():
 
     bk = background_knowledge_controls.get_background_knowledge(dataframe)
 
-    run_analysis = st.checkbox('Run FCI Analysis', value=False)
+    run_analysis = st.checkbox('Run FCI Analysis', value=False, key='run_analysis')
     if run_analysis:
         with st.spinner('Performing FCI Analysis...'):
             try:

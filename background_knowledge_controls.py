@@ -25,64 +25,70 @@ def reset_background_knowledge_state():
         if key.startswith("tier_"):
             st.session_state[key] = 5  # Set the base value for tiers
 
+def _remove_pair(relationship_type: str, idx: int):
+    """Callback to remove a relationship pair from session state."""
+    st.session_state[f"{relationship_type}_pairs"].pop(idx)
+
+def _add_pair(relationship_type: str):
+    """Callback to add a relationship pair to session state."""
+    from_key = f"new_{relationship_type}_from"
+    to_key = f"new_{relationship_type}_to"
+    new_from = st.session_state[from_key]
+    new_to = st.session_state[to_key]
+    if new_from != new_to:
+        if (new_from, new_to) not in st.session_state[f"{relationship_type}_pairs"]:
+            st.session_state[f"{relationship_type}_pairs"].append((new_from, new_to))
+
 def _add_relationship_controls(df: pd.DataFrame, relationship_type: str) -> List[Tuple[str, str]]:
     """Create UI for adding edge relationships with proper state management."""
     cols = df.columns.tolist()
-    
+
     # Initialize session state for tracking pairs
     if f"{relationship_type}_pairs" not in st.session_state:
         st.session_state[f"{relationship_type}_pairs"] = []
-    
+
     with st.container():
         st.markdown(f"### {relationship_type.capitalize()} Relationships")
-        
+
         # Display existing pairs with removal option
         for idx, pair in enumerate(st.session_state[f"{relationship_type}_pairs"]):
             col1, col2, col3 = st.columns([3, 3, 1])
             with col1:
                 st.selectbox(
-                    "From variable", 
-                    [pair[0]], 
+                    "From variable",
+                    [pair[0]],
                     key=f"{relationship_type}_from_existing_{idx}",
                     disabled=True
                 )
             with col2:
                 st.selectbox(
-                    "To variable", 
-                    [pair[1]], 
+                    "To variable",
+                    [pair[1]],
                     key=f"{relationship_type}_to_existing_{idx}",
                     disabled=True
                 )
             with col3:
-                if st.button("❌", key=f"remove_{relationship_type}_{idx}"):
-                    del st.session_state[f"{relationship_type}_pairs"][idx]
-                    st.rerun()
+                st.button("❌", key=f"remove_{relationship_type}_{idx}",
+                          on_click=_remove_pair, args=(relationship_type, idx))
 
         # Add new pair controls
         col1, col2, col3 = st.columns([3, 3, 1])
         with col1:
             new_from = st.selectbox(
-                "From variable", 
-                cols, 
+                "From variable",
+                cols,
                 key=f"new_{relationship_type}_from"
             )
         with col2:
             new_to = st.selectbox(
-                "To variable", 
-                cols, 
+                "To variable",
+                cols,
                 key=f"new_{relationship_type}_to"
             )
         with col3:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ Add", key=f"add_{relationship_type}"):
-                if{new_from != new_to}:
-                    if (new_from, new_to) not in st.session_state[f"{relationship_type}_pairs"]:
-                        st.session_state[f"{relationship_type}_pairs"].append((new_from, new_to))
-                    else:
-                        st.warning("This relationship already exists!")
-                else:
-                    st.warning("Cannot create self-relationship")
-                st.rerun()
+            st.button("➕ Add", key=f"add_{relationship_type}",
+                      on_click=_add_pair, args=(relationship_type,))
 
     return st.session_state[f"{relationship_type}_pairs"]
 
