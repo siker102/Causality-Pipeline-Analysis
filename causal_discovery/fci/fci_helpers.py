@@ -91,7 +91,6 @@ def get_color_edges(graph: GeneralGraph) -> List[Edge]:
 
             if defVisible(edge, graph):
                 edge.properties.append(Edge.Property.nl)  # bold
-                print(edge)
             else:
                 edge.properties.append(Edge.Property.pl)
     return edges
@@ -214,17 +213,7 @@ def run_FCI_analysis(dataframe, test_type, alpha, bk: BackgroundKnowledge) -> Tu
     data = dataframe.to_numpy()
     column_names = dataframe.columns.tolist()
 
-    print(bk.forbidden_pattern_rules_specs)
-    print(bk.required_pattern_rules_specs)
-    print(bk.forbidden_rules_specs)
-    print(bk.required_rules_specs)
-    print(bk.tier_map)
-    print(bk.tier_value_map)
     g, edges = fci_remake(data, test_type, alpha=alpha, background_knowledge=bk)
-
-    for rule in bk.required_rules_specs:
-        print("Required rules specs:", rule[0].get_name(), "->", rule[1].get_name())
-    print("FCI Analysis completed.")
 
     for i, node in enumerate(g.get_nodes()):
         if node is not None:

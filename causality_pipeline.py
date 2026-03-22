@@ -155,11 +155,8 @@ def display_PC_results(g: CausalGraph):
         #    st.write(edge.get_node1().get_name(), edge.get_node2().get_name(), edge.get_endpoint1(), edge.get_endpoint2(), edge.properties)
 
 
-        print('here', g.G)
-        
         pdy = to_pydot(g.G)
         image_data = pdy.create_png()
-        print('here niowe')
 
         # Display image
         st.image(image_data, caption="PC Analysis Result (CPDAG: undirected edges = orientation undetermined)")
