@@ -34,8 +34,16 @@ def to_pydot(G: GeneralGraph, edges: List[Edge] | None = None, labels: List[str]
             return 'normal'
         elif endpoint == Endpoint.CIRCLE:
             return 'odot'
+        elif endpoint == Endpoint.NULL:
+            return 'none'
+        elif endpoint == Endpoint.STAR:
+            return 'diamond'
+        elif endpoint == Endpoint.TAIL_AND_ARROW:
+            return 'normal'
+        elif endpoint == Endpoint.ARROW_AND_ARROW:
+            return 'normal'
         else:
-            raise NotImplementedError()
+            raise NotImplementedError(f"Unknown endpoint type: {endpoint}")
 
     if edges is None:
         edges = G.get_graph_edges()

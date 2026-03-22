@@ -35,4 +35,6 @@ Thumbs.db
 # Exclude PAGId-main folder
 PAGId-main/
 relevant papers/*
-CLAUDE.m
+CLAUDE.md
+.claude/*
+.claude/settings.local.json

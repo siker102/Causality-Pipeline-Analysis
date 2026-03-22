@@ -18,6 +18,7 @@ import background_knowledge_controls
 import random_scm_generation
 from causal_discovery.idp_and_cidp.idp import idp
 from causal_discovery.idp_and_cidp.cidp import cidp
+from causal_discovery.idp_and_cidp.evaluate import evaluate_causal_effect
 
 # Constants
 FCI_EDGE_ENCODING = {
@@ -176,12 +177,286 @@ def display_PC_results(g: CausalGraph):
         #st.write(f"Definitely direct edges: {', '.join([f'{edge.get_node1().get_name()} -> {edge.get_node2().get_name()}' for edge in visible_edges])}")
 
 
-def _run_idp_cidp_ui(g: GeneralGraph, edges: list[Edge]):
+def _has_possibly_causal_path(amat: np.ndarray, node_names: list[str], source: str, target: str) -> bool:
+    """Check if there is any possibly-directed path from source to target in the PAG.
+
+    In a PAG, an edge i-j is possibly directed i->j if:
+    - amat[i,j] (endpoint at j) is arrowhead (2) or circle (1)
+    - amat[j,i] (endpoint at i) is tail (3) or circle (1)
+    An edge with arrowhead at i (amat[j,i]=2) cannot be part of a causal path from i.
+    """
+    idx = {n: i for i, n in enumerate(node_names)}
+    src = idx[source]
+    tgt = idx[target]
+    n = len(node_names)
+
+    visited = set()
+    stack = [src]
+    while stack:
+        current = stack.pop()
+        if current == tgt:
+            return True
+        if current in visited:
+            continue
+        visited.add(current)
+        for neighbor in range(n):
+            if neighbor in visited:
+                continue
+            ep_at_neighbor = amat[current, neighbor]  # endpoint at neighbor side
+            ep_at_current = amat[neighbor, current]    # endpoint at current side
+            # Possibly directed current -> neighbor:
+            # current side: tail (3) or circle (1), NOT arrowhead (2)
+            # neighbor side: arrowhead (2) or circle (1), NOT tail (3) or 0
+            if ep_at_neighbor in (1, 2) and ep_at_current in (1, 3):
+                stack.append(neighbor)
+    return False
+
+
+def _display_idp_result(result: dict, treatment: str, outcome: str, dataframe: pd.DataFrame):
+    """Display identification formula and numeric evaluation for a single IDP/CIDP result."""
+    Qexpr = result.get('Qexpr')
+    if not Qexpr:
+        st.write("No identification formula available.")
+        return
+
+    latex_lines = []
+    st.write("### Identification Formula Steps")
+    for step, formula in Qexpr.items():
+        if isinstance(formula, np.ndarray):
+            formula = formula[0]
+
+        if step == list(Qexpr.keys())[-1]:
+            complete_formula = rf"P({outcome}|do({treatment})) = " + str(formula)
+        else:
+            complete_formula = rf"P_{{{step}}} = " + str(formula)
+        latex_lines.append(complete_formula)
+        st.latex(complete_formula)
+
+    full_latex = "\n".join(latex_lines)
+    st.code(full_latex, language="latex")
+    st.download_button(
+        "Download LaTeX",
+        data=full_latex,
+        file_name="causal_effect.tex",
+        mime="text/plain",
+    )
+
+    # Numeric evaluation
+    st.write("### Numeric Causal Effect Estimate")
+    st.caption(f"P({outcome} | do({treatment})): probability of each {outcome} value "
+               f"when intervening on {treatment}")
+    try:
+        has_continuous = any(
+            dataframe[c].dtype.kind == 'f' and dataframe[c].nunique() > 20
+            for c in dataframe.columns
+        )
+        treatment_bins = 10
+        n_outcome_bins = 10
+        if has_continuous:
+            bin_col1, bin_col2 = st.columns(2)
+            with bin_col1:
+                treatment_bins = st.slider(f"Treatment bins ({treatment})", 3, 50, 10)
+            with bin_col2:
+                n_outcome_bins = st.slider(f"Outcome bins ({outcome})", 3, 50, 5)
+
+        if has_continuous:
+            st.caption(
+                f"Outcome bins are computed per treatment group using quantile-based "
+                f"splitting, so each bin holds roughly the same number of data points. "
+                f"Some treatment groups may have fewer than {n_outcome_bins} outcome bins "
+                f"if ties at quantile boundaries prevent a clean split."
+            )
+
+        effect_table = evaluate_causal_effect(
+            result["Qop"], result["query"], dataframe,
+            treatment_vars=[treatment], outcome_vars=[outcome],
+            treatment_bins=treatment_bins, outcome_bins=n_outcome_bins,
+        )
+        if len(effect_table) > 0:
+            # --- Expected outcome per treatment bin (summary chart) ---
+            if treatment in effect_table.columns and outcome in effect_table.columns:
+                def _interval_sort_key(x):
+                    return x.mid if hasattr(x, "mid") else float(x)
+
+                treat_values_sorted = sorted(effect_table[treatment].unique(), key=_interval_sort_key)
+                summary_rows = []
+                for t_val in treat_values_sorted:
+                    subset = effect_table[effect_table[treatment] == t_val]
+                    midpoints = subset[outcome].apply(
+                        lambda x: x.mid if hasattr(x, "mid") else float(x)
+                    )
+                    midpoints = pd.to_numeric(midpoints, errors="coerce")
+                    valid = midpoints.notna()
+                    if valid.any():
+                        probs = subset.loc[valid, "prob"].values
+                        mids = midpoints[valid].values
+                        expected = (mids * probs).sum()
+                        std = np.sqrt((probs * (mids - expected) ** 2).sum())
+                        t_mid = float(t_val.mid) if hasattr(t_val, "mid") else float(t_val)
+                        summary_rows.append({"treatment_mid": t_mid, "expected_outcome": expected, "std": std})
+                if summary_rows:
+                    summary_df = pd.DataFrame(summary_rows).sort_values("treatment_mid")
+                    x_vals = summary_df["treatment_mid"].values
+                    y_vals = summary_df["expected_outcome"].values
+                    std_vals = summary_df["std"].values
+
+                    st.write(f"### Expected {outcome} per treatment intervention")
+                    st.caption(
+                        f"Each point shows the expected value of {outcome} when {treatment} "
+                        f"is forced to that range. The shaded band shows ±1 standard "
+                        f"deviation of the outcome distribution."
+                    )
+                    fig, ax = plt.subplots(figsize=(8, 4))
+                    ax.fill_between(x_vals, y_vals - std_vals, y_vals + std_vals, alpha=0.2, label="±1 std")
+                    ax.plot(x_vals, y_vals, marker="o", linewidth=2, label=f"E[{outcome}]")
+                    ax.set_xlabel(f"{treatment} (bin midpoint)")
+                    ax.set_ylabel(f"E[{outcome}]")
+                    ax.set_title(f"Causal Effect: {treatment} → {outcome}")
+                    ax.legend()
+                    ax.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+                    plt.close(fig)
+
+            # --- Full probability table and per-bin charts ---
+            st.write("### Per-bin outcome distributions")
+            display_table = effect_table.copy()
+            for col in display_table.columns:
+                if col != "prob":
+                    display_table[col] = display_table[col].astype(str)
+
+            st.dataframe(display_table.style.format({"prob": "{:.4f}"}))
+
+            if treatment in display_table.columns and outcome in display_table.columns:
+                treat_values = [str(t) for t in treat_values_sorted]
+                cols = st.columns(min(len(treat_values), 4))
+                for i, t_val in enumerate(treat_values):
+                    subset = display_table[display_table[treatment] == t_val].sort_values(outcome, key=lambda s: s.astype(str))
+                    with cols[i % len(cols)]:
+                        st.write(f"**do({treatment}={t_val})**")
+                        chart = subset[[outcome, "prob"]].copy()
+                        chart[outcome] = chart[outcome].astype(str)
+                        st.line_chart(chart.set_index(outcome)["prob"])
+            else:
+                var_cols = [c for c in display_table.columns if c != "prob"]
+                if var_cols:
+                    chart_data = display_table.copy()
+                    chart_data["label"] = chart_data[var_cols].astype(str).agg(", ".join, axis=1)
+                    st.line_chart(chart_data.set_index("label")["prob"])
+        else:
+            st.warning("No data rows matched the evaluation.")
+    except Exception as eval_err:
+        st.warning(f"Numeric evaluation failed: {eval_err}")
+
+
+def _run_idp_cidp_ui(g: GeneralGraph, edges: list[Edge], dataframe: pd.DataFrame):
     """Streamlit UI for IDP/CIDP causal effect identification."""
     st.subheader("Causal Effect Identification")
 
     node_names = [node.get_name() for node in g.get_nodes()]
 
+    mode = st.radio(
+        "Mode:",
+        ["Find all identifiable effects (IDP)", "Single query (IDP/CIDP)"],
+        horizontal=True,
+    )
+
+    if mode == "Find all identifiable effects (IDP)":
+        _run_idp_batch_ui(g, node_names, dataframe)
+    else:
+        _run_idp_single_ui(g, node_names, dataframe)
+
+
+def _run_idp_batch_ui(g: GeneralGraph, node_names: list[str], dataframe: pd.DataFrame):
+    """Run IDP on all treatment-outcome pairs, show identifiable ones, let user pick."""
+    if st.button("Find all identifiable effects"):
+        amat = g.to_pcalg_matrix()
+        all_results = {}
+        identifiable = []
+        trivial = []
+        not_identifiable = []
+
+        progress = st.progress(0)
+        pairs = [(x, y) for x in node_names for y in node_names if x != y]
+        for i, (x, y) in enumerate(pairs):
+            try:
+                result = idp(amat, [x], [y], node_names, verbose=False)
+                key = f"P({y}|do({x}))"
+                is_trivial = not _has_possibly_causal_path(amat, node_names, x, y)
+                all_results[key] = {
+                    'result': result,
+                    'treatment': x,
+                    'outcome': y,
+                    'trivial': is_trivial,
+                }
+                if result['id']:
+                    if is_trivial:
+                        trivial.append(key)
+                    else:
+                        identifiable.append(key)
+                else:
+                    not_identifiable.append(key)
+            except Exception:
+                not_identifiable.append(f"P({y}|do({x}))")
+            progress.progress((i + 1) / len(pairs))
+        progress.empty()
+
+        st.session_state.idp_batch_results = all_results
+        st.session_state.idp_batch_identifiable = identifiable
+        st.session_state.idp_batch_trivial = trivial
+        st.session_state.idp_batch_not_identifiable = not_identifiable
+
+    # Display results (persists across reruns)
+    if 'idp_batch_results' not in st.session_state:
+        return
+
+    identifiable = st.session_state.idp_batch_identifiable
+    trivial = st.session_state.idp_batch_trivial
+    not_identifiable = st.session_state.idp_batch_not_identifiable
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.success(f"**{len(identifiable)} identifiable**")
+        for key in identifiable:
+            st.write(f"- {key}")
+    with col2:
+        if not_identifiable:
+            st.error(f"**{len(not_identifiable)} not identifiable**")
+            for key in not_identifiable:
+                st.write(f"- {key}")
+
+    show_trivial = False
+    if trivial:
+        show_trivial = st.checkbox(
+            f"Show {len(trivial)} trivial effects (no causal path, P(Y|do(X)) = P(Y))",
+            value=False,
+        )
+        if show_trivial:
+            st.info(f"**{len(trivial)} trivial** (no causal path)")
+            for key in trivial:
+                st.write(f"- {key} = P({key.split('(')[1].split('|')[0]})")
+
+    options = list(identifiable)
+    if show_trivial:
+        for key in trivial:
+            options.append(f"{key} (trivial)")
+
+    if not options:
+        st.warning("No identifiable causal effects found.")
+        return
+
+    selected_label = st.selectbox("Select an effect to evaluate:", options)
+
+    if selected_label:
+        selected_key = selected_label.replace(" (trivial)", "")
+        entry = st.session_state.idp_batch_results[selected_key]
+        if entry.get('trivial'):
+            st.info(f"No causal path exists from {entry['treatment']} to {entry['outcome']}. "
+                    f"P({entry['outcome']}|do({entry['treatment']})) = P({entry['outcome']})")
+        _display_idp_result(entry['result'], entry['treatment'], entry['outcome'], dataframe)
+
+
+def _run_idp_single_ui(g: GeneralGraph, node_names: list[str], dataframe: pd.DataFrame):
+    """Single query mode for IDP or CIDP."""
     col1, col2 = st.columns(2)
     with col1:
         treatment = st.selectbox("Treatment variable (X):", node_names)
@@ -195,69 +470,32 @@ def _run_idp_cidp_ui(g: GeneralGraph, edges: list[Edge]):
         conditioning = st.multiselect("Conditioning variables (Z):", available_z)
 
     if st.button("Identify Causal Effect"):
-        # Convert graph to pcalg-style adjacency matrix
         amat = g.to_pcalg_matrix()
-
         try:
             if use_cidp and len(conditioning) > 0:
                 result = cidp(amat, [treatment], [outcome], conditioning, node_names, verbose=False)
             else:
                 result = idp(amat, [treatment], [outcome], node_names, verbose=False)
 
-            st.write("### Results")
-            st.write(f"Query: {result.get('query')}")
-
-            if result['id']:
-                st.success("The causal effect is identifiable!")
-                Qexpr = result.get('Qexpr')
-                if Qexpr:
-                    latex_lines = []
-                    st.write("### Identification Formula Steps")
-                    for step, formula in Qexpr.items():
-                        if isinstance(formula, np.ndarray):
-                            formula = formula[0]
-
-                        if step == list(Qexpr.keys())[-1]:
-                            complete_formula = rf"P({outcome}|do({treatment})) = " + str(formula)
-                        else:
-                            complete_formula = rf"P_{{{step}}} = " + str(formula)
-                        latex_lines.append(complete_formula)
-                        st.latex(complete_formula)
-
-                    full_latex = "\n".join(latex_lines)
-                    st.code(full_latex, language="latex")
-                    st.download_button(
-                        "Download LaTeX",
-                        data=full_latex,
-                        file_name="causal_effect.tex",
-                        mime="text/plain",
-                    )
-                else:
-                    st.write("No identification formula available.")
-            else:
-                st.error("The causal effect is not identifiable.")
-
-            # Save results in session state
-            if 'idp_results' not in st.session_state:
-                st.session_state.idp_results = []
-            st.session_state.idp_results.append({
-                'treatment': treatment,
-                'outcome': outcome,
-                'conditioning': conditioning if use_cidp else None,
-                'identifiable': result['id'],
-            })
-
+            st.session_state.idp_current_result = result
+            st.session_state.idp_current_treatment = treatment
+            st.session_state.idp_current_outcome = outcome
         except Exception as e:
             st.error(f"Identification failed: {str(e)}")
 
-    # Display previously queried results
-    if 'idp_results' in st.session_state and st.session_state.idp_results:
-        st.write("### Previous Results")
-        for res in st.session_state.idp_results:
-            cond_str = f" | {','.join(res['conditioning'])}" if res.get('conditioning') else ""
-            icon = "+" if res['identifiable'] else "-"
-            st.write(f"P({res['outcome']}|do({res['treatment']}){cond_str}): "
-                      f"{'Identifiable' if res['identifiable'] else 'Not identifiable'}")
+    if 'idp_current_result' in st.session_state:
+        result = st.session_state.idp_current_result
+        treatment = st.session_state.idp_current_treatment
+        outcome = st.session_state.idp_current_outcome
+
+        st.write("### Results")
+        st.write(f"Query: {result.get('query')}")
+
+        if result['id']:
+            st.success("The causal effect is identifiable!")
+            _display_idp_result(result, treatment, outcome, dataframe)
+        else:
+            st.error("The causal effect is not identifiable.")
 
 
 def main():
@@ -437,8 +675,7 @@ def main():
 
             # IDP/CIDP Analysis (only for FCI which produces PAGs)
             if test_algorithm == "FCI":
-                with st.expander("Causal Effect Identification (IDP/CIDP)"):
-                    _run_idp_cidp_ui(g, edges)
+                _run_idp_cidp_ui(g, edges, dataframe)
 
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
