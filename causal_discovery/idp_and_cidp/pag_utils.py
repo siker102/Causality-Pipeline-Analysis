@@ -27,6 +27,33 @@ def induced_pag(amat: ndarray, cnames: list[str], all_names: list[str]) -> ndarr
     return amat[np.ix_(idx, idx)].copy()
 
 
+def get_definite_parents(amat: ndarray, y: str, names: list[str]) -> list[str]:
+    """Return definite parents of *y*: nodes X with X → Y (tail at X, arrow at Y)."""
+    yi = names.index(y)
+    parents = []
+    for xi in range(len(names)):
+        if xi == yi:
+            continue
+        # amat[xi, yi] = endpoint at yi on xi-yi edge → 2 means arrow at Y
+        # amat[yi, xi] = endpoint at xi on xi-yi edge → 3 means tail at X
+        if amat[xi, yi] == 2 and amat[yi, xi] == 3:
+            parents.append(names[xi])
+    return parents
+
+
+def get_possible_parents(amat: ndarray, y: str, names: list[str]) -> list[str]:
+    """Return possible parents of *y*: nodes X with X o→ Y (circle at X, arrow at Y)."""
+    yi = names.index(y)
+    parents = []
+    for xi in range(len(names)):
+        if xi == yi:
+            continue
+        # arrow at Y, circle at X
+        if amat[xi, yi] == 2 and amat[yi, xi] == 1:
+            parents.append(names[xi])
+    return parents
+
+
 def get_adj_nodes(amat: ndarray, x: str, names: list[str]) -> list[str]:
     """Return names of all nodes adjacent to *x*."""
     xi = names.index(x)
@@ -129,6 +156,22 @@ def search_am_descendants(amat: ndarray, x_id: int) -> list[int]:
 # Visible edges  (replaces pcalg::visibleEdge)
 # ---------------------------------------------------------------------------
 
+def _is_dag_like(amat: ndarray) -> bool:
+    """Check if the PAG is fully resolved with no latent confounders (i.e., a DAG).
+
+    A PAG with no circle endpoints (1) and no bidirected edges (2<->2) has no
+    equivalence-class ambiguity and no latent confounders, so it encodes a DAG.
+    """
+    n = amat.shape[0]
+    for i in range(n):
+        for j in range(n):
+            if amat[i, j] == 1:  # circle endpoint → ambiguity
+                return False
+            if i != j and amat[i, j] == 2 and amat[j, i] == 2:  # bidirected → latent
+                return False
+    return True
+
+
 def visible_edge(amat: ndarray, a_id: int, b_id: int) -> bool:
     """Check if the directed edge A -> B is visible in the PAG.
 
@@ -138,6 +181,11 @@ def visible_edge(amat: ndarray, a_id: int, b_id: int) -> bool:
       (b) there is a collider path between C and A that is into A and every
           non-endpoint vertex on the path is a parent of B.
 
+    Special case: In a fully directed PAG (no circles, no bidirected edges),
+    the graph is equivalent to a known DAG with no latent confounders. All
+    directed edges are visible in this case, since the "invisible" concept
+    only applies when there is equivalence-class ambiguity or latent confounding.
+
     Uses pcalg-style adjacency matrix where amat[i,j] = endpoint at j.
     """
     n = amat.shape[0]
@@ -145,6 +193,10 @@ def visible_edge(amat: ndarray, a_id: int, b_id: int) -> bool:
     # Check: A -> B must exist (arrowhead at B, tail at A)
     if not (amat[a_id, b_id] == 2 and amat[b_id, a_id] == 3):
         return False
+
+    # In a DAG (no circles, no bidirected), all directed edges are visible.
+    if _is_dag_like(amat):
+        return True
 
     # Condition (a): Find C not adjacent to B such that C *-> A
     for c_id in range(n):

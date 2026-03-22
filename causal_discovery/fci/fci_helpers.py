@@ -97,6 +97,11 @@ def get_color_edges(graph: GeneralGraph) -> List[Edge]:
     return edges
 
 
+def _has_definite_mismatch(g_ep: Endpoint, true_ep: Endpoint) -> bool:
+    """Return True if the output endpoint is definite (not CIRCLE) and differs from truth."""
+    return g_ep != Endpoint.CIRCLE and g_ep != true_ep
+
+
 def calculate_accuracy_of_graphs(g: GeneralGraph, true_graph: GeneralGraph) -> dict:
     """Compare output graph (PAG or CPDAG) to true DAG and return accuracy counts.
 
@@ -144,6 +149,9 @@ def calculate_accuracy_of_graphs(g: GeneralGraph, true_graph: GeneralGraph) -> d
 
         if g_ep1 == true_ep1 and g_ep2 == true_ep2:
             correct += 1
+        elif _has_definite_mismatch(g_ep1, true_ep1) or _has_definite_mismatch(g_ep2, true_ep2):
+            # A non-circle endpoint contradicts the true endpoint → wrong
+            wrong_orient += 1
         elif (g_ep1 == Endpoint.CIRCLE or g_ep2 == Endpoint.CIRCLE or
               (g_ep1 == Endpoint.TAIL and g_ep2 == Endpoint.TAIL)):
             # Uncertain (FCI circles) or undirected (CPDAG TAIL-TAIL)

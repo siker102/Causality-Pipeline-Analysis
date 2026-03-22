@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import numpy as np
 from typing import Dict, Tuple
@@ -52,3 +54,37 @@ def generate_random_scm(num_vars=5, edge_prob=0.3, noise_level=1.0, num_samples=
     
     # Return data, the graph object, and the equations
     return pd.DataFrame(data, columns=node_names), true_graph, equations
+
+
+def parse_scm_coefficients(equations: Dict[str, str]) -> Dict[str, Dict[str, float]]:
+    """Parse coefficient dict from SCM equation strings.
+
+    Returns a dict mapping each variable to {parent_name: coefficient}.
+    """
+    coefficients: Dict[str, Dict[str, float]] = {}
+    for var, eq in equations.items():
+        coefficients[var] = {}
+        for m in re.finditer(r'([+-]?\d+\.?\d*)\*(\w+)', eq):
+            coefficients[var][m.group(2)] = float(m.group(1))
+    return coefficients
+
+
+def total_causal_effect(
+    equations: Dict[str, str], treatment: str, outcome: str,
+) -> float:
+    """Compute the true total causal effect of treatment on outcome in a linear SCM.
+
+    For linear SCMs, the total causal effect equals the sum over all directed
+    paths of the product of edge coefficients along each path.
+    """
+    coefficients = parse_scm_coefficients(equations)
+
+    def _sum_paths(source: str, target: str) -> float:
+        if source == target:
+            return 1.0
+        total = 0.0
+        for parent, coeff in coefficients.get(target, {}).items():
+            total += coeff * _sum_paths(source, parent)
+        return total
+
+    return _sum_paths(treatment, outcome)

@@ -18,7 +18,9 @@ import background_knowledge_controls
 import random_scm_generation
 from causal_discovery.idp_and_cidp.idp import idp
 from causal_discovery.idp_and_cidp.cidp import cidp
-from causal_discovery.idp_and_cidp.evaluate import evaluate_causal_effect
+from causal_discovery.idp_and_cidp.evaluate import evaluate_causal_effect, compute_importance_weights
+from causal_discovery.idp_and_cidp.pag_utils import get_definite_parents, get_possible_parents
+from sklearn.linear_model import LinearRegression
 
 # Constants
 FCI_EDGE_ENCODING = {
@@ -212,7 +214,285 @@ def _has_possibly_causal_path(amat: np.ndarray, node_names: list[str], source: s
     return False
 
 
-def _display_idp_result(result: dict, treatment: str, outcome: str, dataframe: pd.DataFrame):
+def _compute_true_total_effect(treatment: str, outcome: str) -> Optional[float]:
+    """Compute true total causal effect of treatment on outcome from generated SCM."""
+    if 'scm_equations' not in st.session_state or 'true_graph' not in st.session_state:
+        return None
+    if st.session_state.true_graph is None:
+        return None
+    return random_scm_generation.total_causal_effect(
+        st.session_state.scm_equations, treatment, outcome,
+    )
+
+
+def _wls_fit(X: np.ndarray, y: np.ndarray, weights: np.ndarray):
+    """Weighted least squares regression. Returns (coefficients, intercept, R², std_errors)."""
+    n, k = X.shape
+    W = np.diag(weights)
+
+    # Add intercept column
+    X_aug = np.column_stack([X, np.ones(n)])
+    # WLS: beta = (X'WX)^-1 X'Wy
+    XtW = X_aug.T @ W
+    XtWX = XtW @ X_aug
+    XtWy = XtW @ y
+
+    try:
+        beta = np.linalg.solve(XtWX, XtWy)
+    except np.linalg.LinAlgError:
+        beta = np.linalg.lstsq(XtWX, XtWy, rcond=None)[0]
+
+    coeffs = beta[:-1]
+    intercept = beta[-1]
+
+    y_pred = X_aug @ beta
+    residuals = y - y_pred
+
+    # Weighted R²
+    w_ss_res = np.sum(weights * residuals ** 2)
+    y_wmean = np.average(y, weights=weights)
+    w_ss_tot = np.sum(weights * (y - y_wmean) ** 2)
+    r_squared = 1 - w_ss_res / w_ss_tot if w_ss_tot > 0 else float('nan')
+
+    # Standard errors
+    if n > k + 1:
+        w_mse = w_ss_res / (n - k - 1)
+        try:
+            cov_matrix = w_mse * np.linalg.inv(XtWX)
+            se = np.sqrt(np.maximum(np.diag(cov_matrix), 0))
+            se_coeffs = se[:-1]
+            se_intercept = se[-1]
+        except np.linalg.LinAlgError:
+            se_coeffs = np.full(k, float('nan'))
+            se_intercept = float('nan')
+    else:
+        se_coeffs = np.full(k, float('nan'))
+        se_intercept = float('nan')
+
+    return coeffs, intercept, r_squared, se_coeffs, se_intercept
+
+
+def _format_equation(outcome: str, parent_names: list, coeffs: np.ndarray, intercept: float) -> str:
+    """Format a structural equation as a string for display."""
+    terms = []
+    for name, c in zip(parent_names, coeffs):
+        sign = "+" if c >= 0 else "-"
+        if terms:
+            terms.append(f" {sign} {abs(c):.4f} \\cdot {name}")
+        else:
+            if c < 0:
+                terms.append(f"-{abs(c):.4f} \\cdot {name}")
+            else:
+                terms.append(f"{c:.4f} \\cdot {name}")
+    sign_int = "+" if intercept >= 0 else "-"
+    terms.append(f" {sign_int} {abs(intercept):.4f}")
+    return f"{outcome} = {''.join(terms)}"
+
+
+def _display_recovered_equation(
+    summary_df: pd.DataFrame,
+    treatment: str,
+    outcome: str,
+    dataframe: pd.DataFrame,
+    amat: np.ndarray = None,
+    node_names: list = None,
+):
+    """Recover structural equation(s) using WLS with IDP importance weights."""
+    st.write("### Recovered Linear Equation")
+
+    # --- 1) Full structural equation (all definite parents via joint IDP) ---
+    full_eq_shown = False
+    if amat is not None and node_names is not None:
+        definite_parents = get_definite_parents(amat, outcome, node_names)
+        possible_parents = get_possible_parents(amat, outcome, node_names)
+
+        if len(definite_parents) >= 1:
+            # Try joint IDP: P(outcome | do(all definite parents))
+            try:
+                joint_result = idp(amat, definite_parents, [outcome], node_names, verbose=False)
+                if joint_result['id']:
+                    weights = compute_importance_weights(
+                        joint_result['Qop'], joint_result['query'], dataframe,
+                    )
+                    X = dataframe[definite_parents].values
+                    y = dataframe[outcome].values
+                    coeffs, intercept, r_sq, se_coeffs, se_int = _wls_fit(X, y, weights)
+
+                    st.write("#### Full Structural Equation (all parents, WLS with IDP weights)")
+                    eq_str = _format_equation(outcome, definite_parents, coeffs, intercept)
+                    st.latex(eq_str + " + \\varepsilon")
+
+                    # Coefficient table
+                    rows = []
+                    for name, c, se in zip(definite_parents, coeffs, se_coeffs):
+                        rows.append({
+                            "Variable": name,
+                            "Estimate": c,
+                            "Std. Error": se,
+                            "95% CI Lower": c - 1.96 * se,
+                            "95% CI Upper": c + 1.96 * se,
+                        })
+                    rows.append({
+                        "Variable": "Intercept",
+                        "Estimate": intercept,
+                        "Std. Error": se_int,
+                        "95% CI Lower": intercept - 1.96 * se_int,
+                        "95% CI Upper": intercept + 1.96 * se_int,
+                    })
+                    coeff_df = pd.DataFrame(rows)
+                    st.dataframe(coeff_df.style.format({
+                        "Estimate": "{:.4f}", "Std. Error": "{:.4f}",
+                        "95% CI Lower": "{:.4f}", "95% CI Upper": "{:.4f}",
+                    }))
+                    st.write(f"**R² = {r_sq:.4f}**")
+                    st.caption(
+                        "**R² (coefficient of determination)** measures how much variance in the outcome is explained "
+                        "by the linear model (0 = none, 1 = all). R² ≈ 1.0 is expected when data comes from a linear SCM. "
+                        "For non-linear relationships, R² < 1 indicates the linear model is an approximation. "
+                        "On real-world data, R² = 1.0 would be suspicious and may indicate overfitting or data leakage."
+                    )
+
+                    if possible_parents:
+                        st.caption(
+                            f"**Possible additional parents** (circle endpoints in PAG): "
+                            f"{', '.join(possible_parents)}. These may or may not belong in "
+                            f"the structural equation — the PAG cannot determine this with certainty."
+                        )
+
+                    # True SCM comparison for full equation
+                    if ('scm_equations' in st.session_state
+                            and st.session_state.get('true_graph') is not None):
+                        true_eq = st.session_state.scm_equations.get(outcome, "")
+                        st.write("**Comparison with true SCM:**")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write("True structural equation:")
+                            st.code(true_eq)
+                        with col2:
+                            st.write("Recovered structural equation:")
+                            eq_code = f"{outcome} = " + " + ".join(
+                                f"{c:.4f}*{n}" for n, c in zip(definite_parents, coeffs)
+                            ) + f" + ε ~ N({intercept:.4f}, ...)"
+                            st.code(eq_code)
+                        # Per-coefficient comparison
+                        true_coeffs = random_scm_generation.parse_scm_coefficients(
+                            st.session_state.scm_equations
+                        )
+                        true_parent_coeffs = true_coeffs.get(outcome, {})
+                        comp_rows = []
+                        for name, recovered_c in zip(definite_parents, coeffs):
+                            true_c = true_parent_coeffs.get(name, 0.0)
+                            err = abs(recovered_c - true_c)
+                            rel_err = err / abs(true_c) * 100 if true_c != 0 else float('nan')
+                            comp_rows.append({
+                                "Parent": name,
+                                "True β": true_c,
+                                "Recovered β": recovered_c,
+                                "Abs. Error": err,
+                                "Rel. Error (%)": rel_err,
+                            })
+                        st.dataframe(pd.DataFrame(comp_rows).style.format({
+                            "True β": "{:.4f}", "Recovered β": "{:.4f}",
+                            "Abs. Error": "{:.4f}", "Rel. Error (%)": "{:.1f}",
+                        }))
+
+                    full_eq_shown = True
+                else:
+                    st.caption(
+                        f"Joint causal effect P({outcome} | do({', '.join(definite_parents)})) "
+                        f"is **not identifiable** from this PAG. Showing marginal effect only."
+                    )
+            except Exception as e:
+                st.caption(f"Joint identification failed ({e}). Showing marginal effect only.")
+
+    # --- 2) Marginal causal effect (single treatment, from summary chart) ---
+    st.write("#### Marginal Causal Effect (single treatment)")
+    x = summary_df["treatment_mid"].values.reshape(-1, 1)
+    y_vals = summary_df["expected_outcome"].values
+    n = len(x)
+
+    model = LinearRegression()
+    model.fit(x, y_vals)
+    coeff = model.coef_[0]
+    intercept = model.intercept_
+    y_pred = model.predict(x)
+
+    ss_res = np.sum((y_vals - y_pred) ** 2)
+    ss_tot = np.sum((y_vals - np.mean(y_vals)) ** 2)
+    r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else float('nan')
+
+    if n > 2:
+        mse = ss_res / (n - 2)
+        x_flat = x.flatten()
+        se_coeff = np.sqrt(mse / np.sum((x_flat - np.mean(x_flat)) ** 2))
+        se_intercept = np.sqrt(mse * (1 / n + np.mean(x_flat) ** 2 / np.sum((x_flat - np.mean(x_flat)) ** 2)))
+    else:
+        se_coeff = float('nan')
+        se_intercept = float('nan')
+
+    sign = "+" if intercept >= 0 else "-"
+    eq_str = f"E[{outcome} | do({treatment})] = {coeff:.4f} \\cdot {treatment} {sign} {abs(intercept):.4f}"
+    st.latex(eq_str)
+
+    coeff_data = pd.DataFrame({
+        "Variable": [treatment, "Intercept"],
+        "Estimate": [coeff, intercept],
+        "Std. Error": [se_coeff, se_intercept],
+        "95% CI Lower": [coeff - 1.96 * se_coeff, intercept - 1.96 * se_intercept],
+        "95% CI Upper": [coeff + 1.96 * se_coeff, intercept + 1.96 * se_intercept],
+    })
+    st.dataframe(coeff_data.style.format({
+        "Estimate": "{:.4f}", "Std. Error": "{:.4f}",
+        "95% CI Lower": "{:.4f}", "95% CI Upper": "{:.4f}",
+    }))
+    st.write(f"**R² = {r_squared:.4f}**")
+    st.caption(
+        "**R² (coefficient of determination)** measures how much variance in the outcome is explained "
+        "by the linear model (0 = none, 1 = all). R² ≈ 1.0 is expected when data comes from a linear SCM. "
+        "For non-linear relationships, R² < 1 indicates the linear model is an approximation. "
+        "On real-world data, R² = 1.0 would be suspicious and may indicate overfitting or data leakage."
+    )
+
+    # True total effect comparison for marginal
+    if not full_eq_shown:
+        true_effect = _compute_true_total_effect(treatment, outcome)
+        if true_effect is not None:
+            true_eq = st.session_state.scm_equations.get(outcome, "")
+            st.write("**Comparison with true SCM:**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("True structural equation:")
+                st.code(true_eq)
+                st.write(f"True total causal effect of {treatment} on {outcome}: **{true_effect:.4f}**")
+            with col2:
+                st.write(f"Recovered marginal effect: **{coeff:.4f}**")
+                if true_effect != 0:
+                    error_pct = abs(coeff - true_effect) / abs(true_effect) * 100
+                    st.write(f"Relative error: **{error_pct:.1f}%**")
+
+    # Disclaimers
+    st.caption(
+        "**Linearity assumption:** These equations assume linear relationships. "
+        "If the true causal relationships are non-linear, these are linear approximations. "
+        "Check R² values to assess fit quality."
+    )
+    if full_eq_shown:
+        st.caption(
+            "**WLS with IDP weights:** The full structural equation uses weighted least squares "
+            "where the weights are derived from the IDP identification formula. These weights "
+            "correct for confounding bias from latent variables, enabling consistent estimation "
+            "of structural coefficients even when unobserved confounders are present. "
+            "See theory/weighted_structural_equation_recovery.md for details."
+        )
+    st.caption(
+        "**Marginal vs structural:** The marginal effect shows the total causal effect of "
+        f"{treatment} on {outcome} (summing over all directed paths). The structural equation "
+        "shows the direct coefficients for each parent in the SCM."
+    )
+
+
+def _display_idp_result(result: dict, treatment: str, outcome: str, dataframe: pd.DataFrame,
+                        amat: np.ndarray = None, node_names: list = None):
     """Display identification formula and numeric evaluation for a single IDP/CIDP result."""
     Qexpr = result.get('Qexpr')
     if not Qexpr:
@@ -273,6 +553,7 @@ def _display_idp_result(result: dict, treatment: str, outcome: str, dataframe: p
             treatment_bins=treatment_bins, outcome_bins=n_outcome_bins,
         )
         if len(effect_table) > 0:
+            summary_df = None
             # --- Expected outcome per treatment bin (summary chart) ---
             if treatment in effect_table.columns and outcome in effect_table.columns:
                 def _interval_sort_key(x):
@@ -342,6 +623,13 @@ def _display_idp_result(result: dict, treatment: str, outcome: str, dataframe: p
                     chart_data = display_table.copy()
                     chart_data["label"] = chart_data[var_cols].astype(str).agg(", ".join, axis=1)
                     st.line_chart(chart_data.set_index("label")["prob"])
+
+            # --- Recovered Linear Equation ---
+            if summary_df is not None and len(summary_df) >= 2:
+                _display_recovered_equation(
+                    summary_df, treatment, outcome, dataframe,
+                    amat=amat, node_names=node_names,
+                )
         else:
             st.warning("No data rows matched the evaluation.")
     except Exception as eval_err:
@@ -452,7 +740,8 @@ def _run_idp_batch_ui(g: GeneralGraph, node_names: list[str], dataframe: pd.Data
         if entry.get('trivial'):
             st.info(f"No causal path exists from {entry['treatment']} to {entry['outcome']}. "
                     f"P({entry['outcome']}|do({entry['treatment']})) = P({entry['outcome']})")
-        _display_idp_result(entry['result'], entry['treatment'], entry['outcome'], dataframe)
+        _display_idp_result(entry['result'], entry['treatment'], entry['outcome'], dataframe,
+                            amat=g.to_pcalg_matrix(), node_names=node_names)
 
 
 def _run_idp_single_ui(g: GeneralGraph, node_names: list[str], dataframe: pd.DataFrame):
@@ -493,7 +782,8 @@ def _run_idp_single_ui(g: GeneralGraph, node_names: list[str], dataframe: pd.Dat
 
         if result['id']:
             st.success("The causal effect is identifiable!")
-            _display_idp_result(result, treatment, outcome, dataframe)
+            _display_idp_result(result, treatment, outcome, dataframe,
+                                amat=g.to_pcalg_matrix(), node_names=node_names)
         else:
             st.error("The causal effect is not identifiable.")
 

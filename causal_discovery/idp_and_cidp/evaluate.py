@@ -206,6 +206,98 @@ def _detect_conditioning_vars(
 
 
 # ---------------------------------------------------------------------------
+# Weight extraction (for WLS structural equation recovery)
+# ---------------------------------------------------------------------------
+
+def compute_importance_weights(
+    qop: dict[str, Any],
+    query: str,
+    data: pd.DataFrame,
+) -> np.ndarray:
+    """Compute per-data-point importance weights from an IDP/CIDP formula.
+
+    These weights reweight observational data to match the interventional
+    distribution specified by the identification formula.  Useful for
+    weighted least squares regression to recover structural coefficients.
+
+    Returns
+    -------
+    np.ndarray
+        Non-negative importance weights, one per data row.
+    """
+    n = len(data)
+    cache: dict[str, np.ndarray] = {}
+
+    def _weights_for_density(log_w: np.ndarray) -> np.ndarray:
+        centered = log_w - np.median(log_w)
+        centered = np.clip(centered, -500, 500)
+        return np.exp(centered)
+
+    def resolve(key: str) -> np.ndarray:
+        if key in cache:
+            return cache[key]
+
+        entry = qop[key]
+        if entry == 1:
+            cache[key] = np.zeros(n)
+            return cache[key]
+
+        op_type = entry["type"]
+        param = entry["param"]
+
+        if op_type == "none":
+            log_weights = np.zeros(n)
+        elif op_type == "prop6":
+            parent_key = _interv_key(param["interv"])
+            if parent_key == "obs" or parent_key not in qop:
+                log_parent = np.zeros(n)
+                density_weights = None
+            else:
+                log_parent = resolve(parent_key)
+                density_weights = _weights_for_density(log_parent)
+
+            den_vars = param["den.var"]
+            den_cond = param["den.cond"]
+            if den_cond:
+                log_density = _conditional_log_density(
+                    data, den_vars, den_cond, density_weights
+                )
+            else:
+                log_density = _marginal_log_density(
+                    data, den_vars, density_weights
+                )
+            log_weights = log_parent - log_density
+        elif op_type == "prop7":
+            lw1 = resolve(_interv_key(param["num.prod1"]))
+            lw2 = resolve(_interv_key(param["num.prod2"]))
+            lwd = resolve(_interv_key(param["den"]))
+            log_weights = lw1 + lw2 - lwd
+        elif op_type == "sumset":
+            log_weights = resolve(_interv_key(param["interv"]))
+        elif op_type == "frac_cond":
+            log_weights = resolve(param["prob"])
+        else:
+            raise ValueError(f"Unknown Qop type: {op_type}")
+
+        cache[key] = log_weights
+        return log_weights
+
+    log_weights = resolve(query)
+
+    # Convert to non-negative weights with numerical stability
+    log_weights = log_weights - np.median(log_weights)
+    log_weights = np.clip(log_weights, -500, 500)
+    weights = np.exp(log_weights)
+
+    # Clip extreme weights (top 1% outliers)
+    p99 = np.percentile(weights, 99)
+    if p99 > 0:
+        weights = np.minimum(weights, p99 * 10)
+
+    return weights
+
+
+# ---------------------------------------------------------------------------
 # Main evaluator
 # ---------------------------------------------------------------------------
 
@@ -255,86 +347,7 @@ def evaluate_causal_effect(
         qop, query, treatment_vars, outcome_vars
     )
 
-    n = len(data)
-    cache: dict[str, np.ndarray] = {}
-
-    def _weights_for_density(log_w: np.ndarray) -> np.ndarray:
-        """Convert log-weights to non-negative weights for density estimation."""
-        centered = log_w - np.median(log_w)
-        centered = np.clip(centered, -500, 500)
-        w = np.exp(centered)
-        return w
-
-    def resolve(key: str) -> np.ndarray:
-        """Resolve a Qop entry to per-data-point log-importance-weights."""
-        if key in cache:
-            return cache[key]
-
-        entry = qop[key]
-
-        if entry == 1:
-            cache[key] = np.zeros(n)
-            return cache[key]
-
-        op_type = entry["type"]
-        param = entry["param"]
-
-        if op_type == "none":
-            log_weights = np.zeros(n)
-
-        elif op_type == "prop6":
-            parent_key = _interv_key(param["interv"])
-            if parent_key == "obs" or parent_key not in qop:
-                log_parent = np.zeros(n)
-                density_weights = None
-            else:
-                log_parent = resolve(parent_key)
-                density_weights = _weights_for_density(log_parent)
-
-            den_vars = param["den.var"]
-            den_cond = param["den.cond"]
-
-            if den_cond:
-                log_density = _conditional_log_density(
-                    data, den_vars, den_cond, density_weights
-                )
-            else:
-                log_density = _marginal_log_density(
-                    data, den_vars, density_weights
-                )
-
-            log_weights = log_parent - log_density
-
-        elif op_type == "prop7":
-            lw1 = resolve(_interv_key(param["num.prod1"]))
-            lw2 = resolve(_interv_key(param["num.prod2"]))
-            lwd = resolve(_interv_key(param["den"]))
-            log_weights = lw1 + lw2 - lwd
-
-        elif op_type == "sumset":
-            child_key = _interv_key(param["interv"])
-            log_weights = resolve(child_key)
-
-        elif op_type == "frac_cond":
-            log_weights = resolve(param["prob"])
-
-        else:
-            raise ValueError(f"Unknown Qop type: {op_type}")
-
-        cache[key] = log_weights
-        return log_weights
-
-    log_weights = resolve(query)
-
-    # Convert log-weights to weights with numerical stability
-    log_weights = log_weights - np.median(log_weights)
-    log_weights = np.clip(log_weights, -500, 500)
-    weights = np.exp(log_weights)
-
-    # Clip extreme weights (top 1% outliers)
-    p99 = np.percentile(weights, 99)
-    if p99 > 0:
-        weights = np.minimum(weights, p99 * 10)
+    weights = compute_importance_weights(qop, query, data)
 
     return _bin_and_aggregate(
         data,
